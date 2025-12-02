@@ -1,35 +1,82 @@
 /* eslint-env mocha */
 'use strict'
 
-const { expect, cleanDir, trapAsyncError } = require('./harness')
+const { expect, cleanDir, spy } = require('./harness')
 const { name: packageName } = require('#package')
 const fs = require('fs')
 const os = require('os')
 const ospath = require('node:path')
 const crypto = require('crypto')
+const { EventEmitter } = require('events')
 
 describe('collector-cache-extension', () => {
   const ext = require(packageName)
 
-  const createGeneratorContext = () => ({
-    messages: [],
-    once (eventName, fn) {
-      this[eventName] = fn
-    },
-    on (eventName, fn) {
-      this[eventName] = fn
-    },
-    require,
-    getLogger (name) {
-      const messages = this.messages
-      return {
-        info: (msg) => messages.push({ level: 'info', msg }),
-        debug: (msg) => messages.push({ level: 'debug', msg }),
-        warn: (msg) => messages.push({ level: 'warn', msg }),
-        error: (msg) => messages.push({ level: 'error', msg }),
-      }
-    },
+  // Mock for isomorphic-git
+  const createMockGit = (overrides = {}) => ({
+    clone: spy(async () => {}),
+    fetch: spy(async () => {}),
+    listBranches: spy(async () => ['main']),
+    branch: spy(async () => {}),
+    checkout: spy(async () => {}),
+    ...overrides,
   })
+
+  // Mock for child_process.spawn
+  const createMockSpawn = (exitCode = 0, stdout = '', stderr = '') => {
+    return spy(() => {
+      const proc = new EventEmitter()
+      proc.stdout = new EventEmitter()
+      proc.stderr = new EventEmitter()
+      // Emit events asynchronously
+      setImmediate(() => {
+        if (stdout) proc.stdout.emit('data', Buffer.from(stdout))
+        if (stderr) proc.stderr.emit('data', Buffer.from(stderr))
+        proc.emit('close', exitCode)
+      })
+      return proc
+    })
+  }
+
+  // Mock for child_process module
+  const createMockChildProcess = (spawnMock) => ({
+    spawn: spawnMock || createMockSpawn(),
+  })
+
+  const createGeneratorContext = (mocks = {}) => {
+    const mockGit = mocks.git || createMockGit()
+    const mockChildProcess = mocks.childProcess || createMockChildProcess()
+
+    return {
+      messages: [],
+      mockGit,
+      mockChildProcess,
+      once (eventName, fn) {
+        this[eventName] = fn
+      },
+      on (eventName, fn) {
+        this[eventName] = fn
+      },
+      require (moduleName) {
+        if (moduleName === '@antora/content-aggregator/git') {
+          return mockGit
+        }
+        if (moduleName === 'child_process') {
+          return mockChildProcess
+        }
+        return require(moduleName)
+      },
+      getLogger (name) {
+        const messages = this.messages
+        return {
+          info: (msg) => messages.push({ level: 'info', msg }),
+          debug: (msg) => messages.push({ level: 'debug', msg }),
+          warn: (msg) => messages.push({ level: 'warn', msg }),
+          error: (msg) => messages.push({ level: 'error', msg }),
+        }
+      },
+    }
+  }
 
   const tempDir = (prefix) => fs.mkdtempSync(ospath.join(os.tmpdir(), prefix))
 
@@ -53,13 +100,13 @@ describe('collector-cache-extension', () => {
     workDir = tempDir('collector-cache-extension-test-')
     playbookDir = ospath.join(workDir, 'playbook')
     worktreeDir = ospath.join(workDir, 'worktree')
-    cacheDir = ospath.join(workDir, '.cache/antora')
+    cacheDir = ospath.join(playbookDir, '.cache/antora')
     fs.mkdirSync(playbookDir, { recursive: true })
     fs.mkdirSync(worktreeDir, { recursive: true })
     generatorContext = createGeneratorContext()
     playbook = {
       dir: playbookDir,
-      runtime: { cacheDir: ospath.join(workDir, '.cache/antora') },
+      runtime: { cacheDir: '.cache/antora' }, // Relative to playbook.dir
     }
   })
 
@@ -1505,7 +1552,19 @@ describe('collector-cache-extension', () => {
   })
 
   describe('DRY_RUN mode', () => {
+    let originalExit
+    let exitCode
+
+    beforeEach(() => {
+      originalExit = process.exit
+      exitCode = null
+      process.exit = (code) => {
+        exitCode = code
+      }
+    })
+
     afterEach(() => {
+      process.exit = originalExit
       delete process.env.DRY_RUN
     })
 
@@ -1544,7 +1603,8 @@ describe('collector-cache-extension', () => {
       await generatorContext.contentAggregated({ playbook, contentAggregate })
 
       const infoMessages = generatorContext.messages.filter((m) => m.level === 'info')
-      expect(infoMessages.some((m) => m.msg.includes('DRY_RUN'))).to.be.true()
+      expect(infoMessages.some((m) => m.msg.includes('DRY RUN'))).to.be.true()
+      expect(exitCode).to.equal(0)
     })
   })
 
@@ -1608,8 +1668,8 @@ describe('collector-cache-extension', () => {
     })
 
     it('should find existing worktree in collector cache', async () => {
-      // Set up collector cache with existing worktree
-      const collectorCacheDir = ospath.join(workDir, '.cache/antora/collector')
+      // Set up collector cache with existing worktree (relative to playbookDir)
+      const collectorCacheDir = ospath.join(playbookDir, '.cache/antora/collector')
       const existingWorktree = ospath.join(collectorCacheDir, 'test-repo@main-abc123')
       fs.mkdirSync(existingWorktree, { recursive: true })
       createSourceFile(existingWorktree, 'src/main.c', 'int main() {}')
@@ -1704,10 +1764,21 @@ describe('collector-cache-extension', () => {
     })
 
     it('should handle git fetch errors gracefully', async () => {
-      // Create repo without remote configured
+      // Create a context with a git mock that throws on fetch
+      const mockGit = createMockGit({
+        fetch: spy(async () => {
+          throw new Error('Fetch failed: could not resolve host')
+        }),
+      })
+      const context = createGeneratorContext({ git: mockGit })
+
+      // Create repo with gitdir OUTSIDE worktree to trigger remote build code path
       const repoDir = ospath.join(workDir, 'repo-no-remote')
+      const separateGitdir = ospath.join(workDir, 'separate-gitdir')
       await initBareRepo(repoDir)
       createSourceFile(repoDir, 'src/main.c', 'int main() {}')
+      // Copy .git to separate location
+      fs.cpSync(ospath.join(repoDir, '.git'), separateGitdir, { recursive: true })
 
       const contentAggregate = [
         {
@@ -1729,7 +1800,7 @@ describe('collector-cache-extension', () => {
                 },
               },
               worktree: repoDir,
-              gitdir: ospath.join(repoDir, '.git'),
+              gitdir: separateGitdir, // Outside worktree to trigger remote build path
               refname: 'main',
               reftype: 'branch',
               url: 'https://invalid.example.com/nonexistent.git', // Invalid URL
@@ -1739,11 +1810,11 @@ describe('collector-cache-extension', () => {
         },
       ]
 
-      ext.register.call(generatorContext, { playbook })
-      await generatorContext.contentAggregated({ playbook, contentAggregate })
+      ext.register.call(context, { playbook })
+      await context.contentAggregated({ playbook, contentAggregate })
 
       // Should warn about fetch failure but not crash
-      const warnMessages = generatorContext.messages.filter((m) => m.level === 'warn')
+      const warnMessages = context.messages.filter((m) => m.level === 'warn')
       expect(warnMessages.some((m) => m.msg.includes('Failed to update worktree'))).to.be.true()
     })
 
@@ -1873,6 +1944,528 @@ describe('collector-cache-extension', () => {
 
       // Collector array should be initialized
       expect(contentAggregate[0].origins[0].descriptor.ext.collector).to.be.an('array')
+    })
+  })
+
+  describe('mocked remote build scenarios', () => {
+    it('should clone repository when no worktree exists', async () => {
+      const mockGit = createMockGit()
+      const mockSpawn = createMockSpawn(0, '', '')
+      const context = createGeneratorContext({
+        git: mockGit,
+        childProcess: createMockChildProcess(mockSpawn),
+      })
+
+      const contentAggregate = [
+        {
+          name: 'test-component',
+          origins: [
+            {
+              descriptor: {
+                ext: {
+                  collectorCache: [
+                    {
+                      run: {
+                        key: 'build',
+                        sources: ['src/main.c'],
+                        cachedir: 'build/output',
+                        command: 'echo "building"',
+                      },
+                    },
+                  ],
+                },
+              },
+              worktree: undefined,
+              url: 'https://github.com/example/test-repo.git',
+              gitdir: ospath.join(workDir, 'gitdir'),
+              refname: 'main',
+              reftype: 'branch',
+            },
+          ],
+        },
+      ]
+
+      ext.register.call(context, { playbook })
+      await context.contentAggregated({ playbook, contentAggregate })
+
+      // Git clone should have been called
+      expect(mockGit.clone).to.have.been.called()
+
+      const infoMessages = context.messages.filter((m) => m.level === 'info')
+      expect(infoMessages.some((m) => m.msg.includes('No worktree found'))).to.be.true()
+    })
+
+    it('should initialize submodules after cloning', async () => {
+      const mockGit = createMockGit()
+      const context = createGeneratorContext({ git: mockGit })
+
+      const contentAggregate = [
+        {
+          name: 'test-component',
+          origins: [
+            {
+              descriptor: {
+                ext: {
+                  collectorCache: [
+                    {
+                      run: {
+                        key: 'build',
+                        sources: ['src/main.c'],
+                        cachedir: 'build/output',
+                        command: 'echo "building"',
+                      },
+                    },
+                  ],
+                },
+              },
+              worktree: undefined,
+              url: 'https://github.com/example/test-repo.git',
+              gitdir: ospath.join(workDir, 'gitdir'),
+              refname: 'main',
+              reftype: 'branch',
+            },
+          ],
+        },
+      ]
+
+      ext.register.call(context, { playbook })
+      await context.contentAggregated({ playbook, contentAggregate })
+
+      // Git clone should have been called (spawn for submodules uses direct require, can't mock)
+      expect(mockGit.clone).to.have.been.called()
+
+      // Should log that submodule init is being attempted
+      const debugMessages = context.messages.filter((m) => m.level === 'debug')
+      expect(debugMessages.some((m) => m.msg.includes('Initializing submodules'))).to.be.true()
+    })
+
+    it('should handle submodule init failure gracefully', async () => {
+      const mockGit = createMockGit()
+      const mockSpawn = createMockSpawn(1, '', 'submodule error')
+      const context = createGeneratorContext({
+        git: mockGit,
+        childProcess: createMockChildProcess(mockSpawn),
+      })
+
+      const contentAggregate = [
+        {
+          name: 'test-component',
+          origins: [
+            {
+              descriptor: {
+                ext: {
+                  collectorCache: [
+                    {
+                      run: {
+                        key: 'build',
+                        sources: ['src/main.c'],
+                        cachedir: 'build/output',
+                        command: 'echo "building"',
+                      },
+                    },
+                  ],
+                },
+              },
+              worktree: undefined,
+              url: 'https://github.com/example/test-repo.git',
+              gitdir: ospath.join(workDir, 'gitdir'),
+              refname: 'main',
+              reftype: 'branch',
+            },
+          ],
+        },
+      ]
+
+      ext.register.call(context, { playbook })
+      await context.contentAggregated({ playbook, contentAggregate })
+
+      // Should not error even if submodule init fails
+      const errorMessages = context.messages.filter((m) => m.level === 'error')
+      expect(errorMessages.filter((m) => m.msg.includes('submodule'))).to.have.lengthOf(0)
+    })
+
+    it('should handle git clone failure', async () => {
+      const mockGit = createMockGit({
+        clone: spy(async () => {
+          throw new Error('Clone failed: network error')
+        }),
+      })
+      const context = createGeneratorContext({ git: mockGit })
+
+      const contentAggregate = [
+        {
+          name: 'test-component',
+          origins: [
+            {
+              descriptor: {
+                ext: {
+                  collectorCache: [
+                    {
+                      run: {
+                        key: 'build',
+                        sources: ['src/main.c'],
+                        cachedir: 'build/output',
+                        command: 'echo "building"',
+                      },
+                    },
+                  ],
+                },
+              },
+              worktree: undefined,
+              url: 'https://github.com/example/test-repo.git',
+              gitdir: ospath.join(workDir, 'gitdir'),
+              refname: 'main',
+              reftype: 'branch',
+            },
+          ],
+        },
+      ]
+
+      ext.register.call(context, { playbook })
+      await context.contentAggregated({ playbook, contentAggregate })
+
+      // Should log error but not crash
+      const errorMessages = context.messages.filter((m) => m.level === 'error')
+      expect(errorMessages.some((m) => m.msg.includes('Failed to create worktree'))).to.be.true()
+    })
+
+    it('should call git fetch for remote build with existing worktree', async () => {
+      const mockGit = createMockGit()
+      const context = createGeneratorContext({ git: mockGit })
+
+      // Create worktree directory
+      const remoteWorktree = ospath.join(workDir, 'remote-worktree')
+      fs.mkdirSync(remoteWorktree, { recursive: true })
+      createSourceFile(remoteWorktree, 'src/main.c', 'int main() {}')
+
+      const contentAggregate = [
+        {
+          name: 'test-component',
+          origins: [
+            {
+              descriptor: {
+                ext: {
+                  collectorCache: [
+                    {
+                      run: {
+                        key: 'build',
+                        sources: ['src/main.c'],
+                        cachedir: 'build/output',
+                        command: 'echo "building"',
+                      },
+                    },
+                  ],
+                },
+              },
+              worktree: remoteWorktree,
+              gitdir: ospath.join(workDir, 'remote-gitdir'),
+              refname: 'main',
+              reftype: 'branch',
+              url: 'https://github.com/example/test-repo.git',
+              remote: 'origin',
+            },
+          ],
+        },
+      ]
+
+      ext.register.call(context, { playbook })
+      await context.contentAggregated({ playbook, contentAggregate })
+
+      // Git fetch should have been called for remote builds
+      expect(mockGit.fetch).to.have.been.called()
+    })
+
+    it('should call git branch and checkout for remote build', async () => {
+      const mockGit = createMockGit()
+      const context = createGeneratorContext({ git: mockGit })
+
+      const remoteWorktree = ospath.join(workDir, 'remote-worktree')
+      fs.mkdirSync(remoteWorktree, { recursive: true })
+      createSourceFile(remoteWorktree, 'src/main.c', 'int main() {}')
+
+      const contentAggregate = [
+        {
+          name: 'test-component',
+          origins: [
+            {
+              descriptor: {
+                ext: {
+                  collectorCache: [
+                    {
+                      run: {
+                        key: 'build',
+                        sources: ['src/main.c'],
+                        cachedir: 'build/output',
+                        command: 'echo "building"',
+                      },
+                    },
+                  ],
+                },
+              },
+              worktree: remoteWorktree,
+              gitdir: ospath.join(workDir, 'remote-gitdir'),
+              refname: 'main',
+              reftype: 'branch',
+              url: 'https://github.com/example/test-repo.git',
+              remote: 'origin',
+            },
+          ],
+        },
+      ]
+
+      ext.register.call(context, { playbook })
+      await context.contentAggregated({ playbook, contentAggregate })
+
+      // Git branch and checkout should have been called
+      expect(mockGit.branch).to.have.been.called()
+      expect(mockGit.checkout).to.have.been.called()
+    })
+
+    it('should handle git fetch error gracefully with mocks', async () => {
+      const mockGit = createMockGit({
+        fetch: spy(async () => {
+          throw new Error('Fetch failed: network error')
+        }),
+      })
+      const context = createGeneratorContext({ git: mockGit })
+
+      const remoteWorktree = ospath.join(workDir, 'remote-worktree')
+      fs.mkdirSync(remoteWorktree, { recursive: true })
+      createSourceFile(remoteWorktree, 'src/main.c', 'int main() {}')
+
+      const contentAggregate = [
+        {
+          name: 'test-component',
+          origins: [
+            {
+              descriptor: {
+                ext: {
+                  collectorCache: [
+                    {
+                      run: {
+                        key: 'build',
+                        sources: ['src/main.c'],
+                        cachedir: 'build/output',
+                        command: 'echo "building"',
+                      },
+                    },
+                  ],
+                },
+              },
+              worktree: remoteWorktree,
+              gitdir: ospath.join(workDir, 'remote-gitdir'),
+              refname: 'main',
+              reftype: 'branch',
+              url: 'https://github.com/example/test-repo.git',
+              remote: 'origin',
+            },
+          ],
+        },
+      ]
+
+      ext.register.call(context, { playbook })
+      await context.contentAggregated({ playbook, contentAggregate })
+
+      // Should warn but not crash
+      const warnMessages = context.messages.filter((m) => m.level === 'warn')
+      expect(warnMessages.some((m) => m.msg.includes('Failed to update worktree'))).to.be.true()
+    })
+
+    it('should handle spawn error event', async () => {
+      const mockGit = createMockGit()
+      const errorSpawn = spy(() => {
+        const proc = new EventEmitter()
+        proc.stdout = new EventEmitter()
+        proc.stderr = new EventEmitter()
+        setImmediate(() => {
+          proc.emit('error', new Error('spawn ENOENT'))
+        })
+        return proc
+      })
+      const context = createGeneratorContext({
+        git: mockGit,
+        childProcess: createMockChildProcess(errorSpawn),
+      })
+
+      const contentAggregate = [
+        {
+          name: 'test-component',
+          origins: [
+            {
+              descriptor: {
+                ext: {
+                  collectorCache: [
+                    {
+                      run: {
+                        key: 'build',
+                        sources: ['src/main.c'],
+                        cachedir: 'build/output',
+                        command: 'echo "building"',
+                      },
+                    },
+                  ],
+                },
+              },
+              worktree: undefined,
+              url: 'https://github.com/example/test-repo.git',
+              gitdir: ospath.join(workDir, 'gitdir'),
+              refname: 'main',
+              reftype: 'branch',
+            },
+          ],
+        },
+      ]
+
+      ext.register.call(context, { playbook })
+      await context.contentAggregated({ playbook, contentAggregate })
+
+      // Should handle spawn error gracefully
+      const debugMessages = context.messages.filter((m) => m.level === 'debug')
+      expect(debugMessages.some((m) => m.msg.includes('Failed to run git submodule'))).to.be.true()
+    })
+  })
+
+  describe('beforePublish with mocked remote builds', () => {
+    it('should find worktree in collector cache during beforePublish', async () => {
+      const mockGit = createMockGit()
+      const context = createGeneratorContext({ git: mockGit })
+
+      // Set up collector cache with worktree
+      const collectorCacheDir = ospath.join(playbookDir, '.cache/antora/collector')
+      const worktreeName = 'test-repo@main-abc123'
+      const collectorWorktree = ospath.join(collectorCacheDir, worktreeName)
+      fs.mkdirSync(collectorWorktree, { recursive: true })
+      createSourceFile(collectorWorktree, 'src/main.c', 'int main() {}')
+      createSourceFile(collectorWorktree, 'build/output/result.txt', 'build result')
+
+      const contentAggregate = [
+        {
+          name: 'test-component',
+          origins: [
+            {
+              descriptor: {
+                ext: {
+                  collectorCache: [
+                    {
+                      run: {
+                        key: 'build',
+                        sources: ['src/main.c'],
+                        cachedir: 'build/output',
+                        command: 'echo "building"',
+                      },
+                    },
+                  ],
+                },
+              },
+              worktree: undefined,
+              url: 'https://github.com/example/test-repo.git',
+              gitdir: ospath.join(workDir, 'gitdir'),
+              refname: 'main',
+              reftype: 'branch',
+            },
+          ],
+        },
+      ]
+
+      ext.register.call(context, { playbook })
+      await context.contentAggregated({ playbook, contentAggregate })
+      await context.beforePublish({ playbook })
+
+      // Should find worktree and cache outputs
+      const debugMessages = context.messages.filter((m) => m.level === 'debug')
+      expect(debugMessages.some((m) => m.msg.includes('Found worktree'))).to.be.true()
+    })
+
+    it('should warn when worktree not found in beforePublish', async () => {
+      const mockGit = createMockGit()
+      const context = createGeneratorContext({ git: mockGit })
+
+      // Don't create the worktree
+      const contentAggregate = [
+        {
+          name: 'test-component',
+          origins: [
+            {
+              descriptor: {
+                ext: {
+                  collectorCache: [
+                    {
+                      run: {
+                        key: 'build',
+                        sources: ['src/main.c'],
+                        cachedir: 'build/output',
+                        command: 'echo "building"',
+                      },
+                    },
+                  ],
+                },
+              },
+              worktree: undefined,
+              url: 'https://github.com/example/test-repo.git',
+              gitdir: ospath.join(workDir, 'gitdir'),
+              refname: 'main',
+              reftype: 'branch',
+            },
+          ],
+        },
+      ]
+
+      ext.register.call(context, { playbook })
+      await context.contentAggregated({ playbook, contentAggregate })
+      await context.beforePublish({ playbook })
+
+      const warnMessages = context.messages.filter((m) => m.level === 'warn')
+      expect(warnMessages.some((m) => m.msg.includes('Worktree not found'))).to.be.true()
+    })
+
+    it('should compute hashes during beforePublish for remote builds', async () => {
+      const mockGit = createMockGit()
+      const context = createGeneratorContext({ git: mockGit })
+
+      // Set up collector cache with worktree and outputs
+      const collectorCacheDir = ospath.join(playbookDir, '.cache/antora/collector')
+      const worktreeName = 'test-repo@main-abc123'
+      const collectorWorktree = ospath.join(collectorCacheDir, worktreeName)
+      fs.mkdirSync(collectorWorktree, { recursive: true })
+      createSourceFile(collectorWorktree, 'src/main.c', 'int main() {}')
+      createSourceFile(collectorWorktree, 'build/output/result.txt', 'build result')
+
+      const contentAggregate = [
+        {
+          name: 'test-component',
+          origins: [
+            {
+              descriptor: {
+                ext: {
+                  collectorCache: [
+                    {
+                      run: {
+                        key: 'build',
+                        sources: ['src/main.c'],
+                        cachedir: 'build/output',
+                        command: 'echo "building"',
+                      },
+                    },
+                  ],
+                },
+              },
+              worktree: undefined,
+              url: 'https://github.com/example/test-repo.git',
+              gitdir: ospath.join(workDir, 'gitdir'),
+              refname: 'main',
+              reftype: 'branch',
+            },
+          ],
+        },
+      ]
+
+      ext.register.call(context, { playbook })
+      await context.contentAggregated({ playbook, contentAggregate })
+      await context.beforePublish({ playbook })
+
+      // Should have cached outputs
+      const infoMessages = context.messages.filter((m) => m.level === 'info')
+      expect(infoMessages.some((m) => m.msg.includes('Cached outputs'))).to.be.true()
     })
   })
 })
