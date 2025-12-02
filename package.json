@@ -1,0 +1,68 @@
+{
+  "name": "@carr-james/collector-cache-extension",
+  "version": "1.0.0",
+  "description": "Content-addressable caching extension for Antora Collector",
+  "license": "MPL-2.0",
+  "author": "James Carr",
+  "repository": "github:carr-james/collector-cache-extension",
+  "bugs": {
+    "url": "https://github.com/carr-james/collector-cache-extension/issues"
+  },
+  "engines": {
+    "node": ">=16.0.0"
+  },
+  "scripts": {
+    "build": "npm test && npm run lint",
+    "coverage": "nyc _mocha",
+    "format": "node npm/format.js lib,test,npm",
+    "lint": "eslint \"{lib,test,npm}/**/*.js\"",
+    "test": "_mocha"
+  },
+  "main": "lib/index.js",
+  "exports": {
+    ".": "./lib/index.js",
+    "./collector-cache-extension": "./lib/collector-cache-extension.js"
+  },
+  "imports": {
+    "#package": "./package.json"
+  },
+  "files": [
+    "lib"
+  ],
+  "dependencies": {
+    "fast-glob": "^3.3.0",
+    "isomorphic-git": "^1.35.0"
+  },
+  "devDependencies": {
+    "@antora/content-aggregator": "~3.1",
+    "chai": "~4.3",
+    "chai-fs": "~2.0",
+    "chai-spies": "~1.0",
+    "dirty-chai": "~2.0",
+    "eslint": "~8.33",
+    "eslint-config-standard": "~17.0",
+    "mocha": "~10.8",
+    "nyc": "~15.1",
+    "prettier-eslint": "~15.0"
+  },
+  "keywords": [
+    "antora",
+    "antora-extension",
+    "collector",
+    "cache",
+    "content-addressable"
+  ],
+  "nyc": {
+    "all": true,
+    "cacheDir": "node_modules/.cache/nyc",
+    "include": [
+      "lib/**/*.js"
+    ],
+    "reporter": [
+      "cobertura",
+      "lcov",
+      "text"
+    ],
+    "reportDir": "reports"
+  }
+}
