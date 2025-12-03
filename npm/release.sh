@@ -1,13 +1,9 @@
 #!/bin/bash
 
-# required packages (for ubuntu:kinetic): curl git jq nodejs npm
+# required packages (for ubuntu): curl git jq nodejs npm
 
 if [ ! -v RELEASE_USER ]; then
   export RELEASE_USER=$GITHUB_ACTOR
-fi
-if [ -z "$RELEASE_NPM_TOKEN" ]; then
-  echo No npm token specified for publishing to npmjs.com. Stopping release.
-  exit 1
 fi
 export RELEASE_BRANCH=${GITHUB_REF_NAME:-main}
 RELEASE_GIT_NAME=$(curl -s https://api.github.com/users/$RELEASE_USER | jq -r .name)
@@ -31,9 +27,6 @@ fi
 git config --local user.name "$RELEASE_GIT_NAME"
 git config --local user.email "$RELEASE_GIT_EMAIL"
 
-# configure npm client for publishing
-echo -e "//registry.npmjs.org/:_authToken=$RELEASE_NPM_TOKEN" > $HOME/.npmrc
-
 # release!
 (
   set -e
@@ -45,14 +38,11 @@ echo -e "//registry.npmjs.org/:_authToken=$RELEASE_NPM_TOKEN" > $HOME/.npmrc
   git commit -a -m "release $RELEASE_VERSION [no ci]"
   git tag -m "version $RELEASE_VERSION" v$RELEASE_VERSION
   git push origin $(git describe --tags --exact-match)
-  npm publish --access public --tag $RELEASE_NPM_TAG
+  npm publish --provenance --access public --tag $RELEASE_NPM_TAG
   git push origin $RELEASE_BRANCH
 )
 
 exit_code=$?
-
-# nuke npm settings
-rm -f $HOME/.npmrc
 
 # check for any uncommitted files
 git status -s -b
