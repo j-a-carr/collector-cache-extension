@@ -7,7 +7,13 @@ const os = require('os')
 const ospath = require('node:path')
 const proxyquire = require('proxyquire')
 const EventEmitter = require('events')
-const { resolveSources, resolveDependencySources, buildEntriesMap } = require('../../lib/utils/sources')
+const {
+  isGlobPattern,
+  expandGlobPatterns,
+  resolveSources,
+  resolveDependencySources,
+  buildEntriesMap,
+} = require('../../lib/utils/sources')
 
 describe('utils/sources', () => {
   let workDir
@@ -20,11 +26,100 @@ describe('utils/sources', () => {
     await cleanDir(workDir)
   })
 
+  describe('isGlobPattern', () => {
+    it('should return true for patterns with *', () => {
+      expect(isGlobPattern('*.txt')).to.be.true()
+      expect(isGlobPattern('src/**/*.js')).to.be.true()
+    })
+
+    it('should return true for patterns with ?', () => {
+      expect(isGlobPattern('file?.txt')).to.be.true()
+    })
+
+    it('should return true for patterns with []', () => {
+      expect(isGlobPattern('file[0-9].txt')).to.be.true()
+    })
+
+    it('should return true for patterns with {}', () => {
+      expect(isGlobPattern('*.{js,ts}')).to.be.true()
+    })
+
+    it('should return false for plain paths', () => {
+      expect(isGlobPattern('src/main.c')).to.be.false()
+      expect(isGlobPattern('path/to/file.txt')).to.be.false()
+    })
+  })
+
+  describe('expandGlobPatterns', () => {
+    it('should expand glob patterns to matching files', () => {
+      // Create test files
+      fs.mkdirSync(ospath.join(workDir, 'src'), { recursive: true })
+      fs.writeFileSync(ospath.join(workDir, 'src', 'main.c'), 'int main() {}')
+      fs.writeFileSync(ospath.join(workDir, 'src', 'util.c'), 'void util() {}')
+      fs.writeFileSync(ospath.join(workDir, 'src', 'header.h'), '#pragma once')
+
+      const result = expandGlobPatterns(workDir, ['src/*.c'])
+      expect(result).to.have.lengthOf(2)
+      expect(result).to.include('src/main.c')
+      expect(result).to.include('src/util.c')
+    })
+
+    it('should pass through non-glob paths unchanged', () => {
+      const result = expandGlobPatterns(workDir, ['src/main.c', 'lib/util.js'])
+      expect(result).to.deep.equal(['src/main.c', 'lib/util.js'])
+    })
+
+    it('should handle mixed glob and non-glob patterns', () => {
+      fs.mkdirSync(ospath.join(workDir, 'src'), { recursive: true })
+      fs.writeFileSync(ospath.join(workDir, 'src', 'a.txt'), 'a')
+      fs.writeFileSync(ospath.join(workDir, 'src', 'b.txt'), 'b')
+
+      const result = expandGlobPatterns(workDir, ['static.txt', 'src/*.txt'])
+      expect(result).to.include('static.txt')
+      expect(result).to.include('src/a.txt')
+      expect(result).to.include('src/b.txt')
+    })
+
+    it('should return empty array for glob with no matches', () => {
+      const result = expandGlobPatterns(workDir, ['nonexistent/*.xyz'])
+      expect(result).to.have.lengthOf(0)
+    })
+
+    it('should log glob matches when logger provided', () => {
+      fs.writeFileSync(ospath.join(workDir, 'test.txt'), 'test')
+
+      const messages = []
+      const logger = { debug: (msg) => messages.push(msg) }
+
+      expandGlobPatterns(workDir, ['*.txt'], logger)
+      expect(messages.some((m) => m.includes('Glob') && m.includes('matched'))).to.be.true()
+    })
+
+    it('should not log for non-glob patterns', () => {
+      const messages = []
+      const logger = { debug: (msg) => messages.push(msg) }
+
+      expandGlobPatterns(workDir, ['plain.txt'], logger)
+      expect(messages).to.have.lengthOf(0)
+    })
+  })
+
   describe('resolveSources', () => {
     it('should return static sources when no commands', async () => {
       const sources = await resolveSources(workDir, ['a.txt', 'b.txt'], [])
       expect(sources).to.include('a.txt')
       expect(sources).to.include('b.txt')
+    })
+
+    it('should expand glob patterns in static sources', async () => {
+      fs.mkdirSync(ospath.join(workDir, 'include'), { recursive: true })
+      fs.writeFileSync(ospath.join(workDir, 'include', 'one.h'), '#pragma once')
+      fs.writeFileSync(ospath.join(workDir, 'include', 'two.h'), '#pragma once')
+
+      const sources = await resolveSources(workDir, ['include/*.h'], [])
+      expect(sources).to.have.lengthOf(2)
+      expect(sources).to.include('include/one.h')
+      expect(sources).to.include('include/two.h')
     })
 
     it('should return static sources when commands is null', async () => {

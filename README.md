@@ -27,33 +27,45 @@ Then configure caching in your component descriptor (`antora.yml`):
 
 ```yaml
 ext:
-  collectorCache:
+  collector-cache:
     - run:
-        key: my-build-step
+        key: firmware
         sources:
           - src/main.c
-          - include/*.h
-        cacheDir: .cache/build-output
+          - include/**/*.h
+        cache-dir: build/output
         command: make build
       scan:
-        dir: .cache/build-output
-        files: '**/*.html'
+        - dir: build/output/docs
+          files: '**/*.html'
+          into: modules/ROOT/pages/generated
 ```
 
 ## Configuration
 
-Each entry in `collectorCache` supports:
+Each entry in `collector-cache` supports:
+
+### Run Configuration
 
 | Property | Description |
 |----------|-------------|
 | `run.key` | Unique identifier for this cache entry |
-| `run.sources` | Array of source file patterns to hash |
-| `run.sourceCommands` | Optional shell commands that output additional source paths |
-| `run.cacheDir` | Directory where outputs are stored |
+| `run.sources` | Array of source file paths or glob patterns (e.g., `src/*.c`, `include/**/*.h`) |
+| `run.source-commands` | Optional shell commands that output additional source paths |
+| `run.cache-dir` | Directory where build outputs are stored |
 | `run.command` | The build command to execute |
-| `run.dependsOn` | Optional array of other entry keys this depends on |
-| `run.restoreToWorktree` | Optional glob patterns for files to restore from cache |
-| `scan` | Configuration for scanning outputs into Antora |
+| `run.depends-on` | Optional array of other entry keys this depends on |
+| `run.restore-to-worktree` | Optional glob patterns for files to restore from cache to worktree |
+
+### Scan Configuration
+
+The `scan` property defines how outputs are scanned into Antora. It can be a single entry or an array:
+
+| Property | Description |
+|----------|-------------|
+| `scan.dir` | Source directory containing generated files |
+| `scan.files` | Glob pattern for files to include |
+| `scan.into` | Destination path within the Antora component |
 
 ## Environment Variables
 
@@ -66,7 +78,7 @@ Each entry in `collectorCache` supports:
 
 ### Prerequisites
 
-* Node.js >= 16.0.0
+* Node.js >= 18.0.0
 * npm
 
 ### Setup
