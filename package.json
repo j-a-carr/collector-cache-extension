@@ -1,6 +1,6 @@
 {
   "name": "@carr-james/collector-cache-extension",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Content-addressable caching extension for Antora Collector",
   "license": "MPL-2.0",
   "author": "James Carr",
