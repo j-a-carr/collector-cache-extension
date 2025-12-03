@@ -8,6 +8,7 @@ const os = require('os')
 const ospath = require('node:path')
 const crypto = require('crypto')
 const { EventEmitter } = require('events')
+const proxyquire = require('proxyquire')
 
 describe('collector-cache-extension', () => {
   const ext = require(packageName)
@@ -1667,50 +1668,6 @@ describe('collector-cache-extension', () => {
       expect(debugMessages.some((m) => m.msg.includes('Remote build detected'))).to.be.true()
     })
 
-    it('should find existing worktree in collector cache', async () => {
-      // Set up collector cache with existing worktree (relative to playbookDir)
-      const collectorCacheDir = ospath.join(playbookDir, '.cache/antora/collector')
-      const existingWorktree = ospath.join(collectorCacheDir, 'test-repo@main-abc123')
-      fs.mkdirSync(existingWorktree, { recursive: true })
-      createSourceFile(existingWorktree, 'src/main.c', 'int main() {}')
-
-      const contentAggregate = [
-        {
-          name: 'test-component',
-          origins: [
-            {
-              descriptor: {
-                ext: {
-                  collectorCache: [
-                    {
-                      run: {
-                        key: 'build',
-                        sources: ['src/main.c'],
-                        cachedir: 'build/output',
-                        command: 'echo "building"',
-                      },
-                    },
-                  ],
-                },
-              },
-              // No worktree provided - should find it
-              worktree: undefined,
-              url: 'https://github.com/example/test-repo.git',
-              gitdir: ospath.join(workDir, 'gitdir'),
-              refname: 'main',
-              reftype: 'branch',
-            },
-          ],
-        },
-      ]
-
-      ext.register.call(generatorContext, { playbook })
-      await generatorContext.contentAggregated({ playbook, contentAggregate })
-
-      const debugMessages = generatorContext.messages.filter((m) => m.level === 'debug')
-      expect(debugMessages.some((m) => m.msg.includes('Found worktree'))).to.be.true()
-    })
-
     it('should update worktree via git operations for remote builds', async () => {
       // Create a real git repo to test git operations
       const repoDir = ospath.join(workDir, 'repo')
@@ -1868,44 +1825,6 @@ describe('collector-cache-extension', () => {
       expect(errorMessages).to.have.lengthOf(0)
     })
 
-    it('should create worktree when none exists for remote build', async () => {
-      // This tests the worktree creation path when no worktree is found
-      const contentAggregate = [
-        {
-          name: 'test-component',
-          origins: [
-            {
-              descriptor: {
-                ext: {
-                  collectorCache: [
-                    {
-                      run: {
-                        key: 'build',
-                        sources: ['src/main.c'],
-                        cachedir: 'build/output',
-                        command: 'echo "building"',
-                      },
-                    },
-                  ],
-                },
-              },
-              // No worktree, and it can't be found
-              worktree: undefined,
-              url: 'https://github.com/example/new-repo.git',
-              gitdir: ospath.join(workDir, 'new-gitdir'),
-              refname: 'main',
-              reftype: 'branch',
-            },
-          ],
-        },
-      ]
-
-      ext.register.call(generatorContext, { playbook })
-      await generatorContext.contentAggregated({ playbook, contentAggregate })
-
-      const infoMessages = generatorContext.messages.filter((m) => m.level === 'info')
-      expect(infoMessages.some((m) => m.msg.includes('No worktree found'))).to.be.true()
-    })
   })
 
   describe('collector array initialization', () => {
@@ -1995,6 +1914,214 @@ describe('collector-cache-extension', () => {
       expect(infoMessages.some((m) => m.msg.includes('No worktree found'))).to.be.true()
     })
 
+    it('should warn about invalid entry in no-worktree path', async () => {
+      const mockGit = createMockGit()
+      const context = createGeneratorContext({ git: mockGit })
+
+      const contentAggregate = [
+        {
+          name: 'test-component',
+          origins: [
+            {
+              descriptor: {
+                ext: {
+                  collectorCache: [
+                    {
+                      run: {
+                        // Missing key, sources, or cachedir
+                        command: 'echo "building"',
+                      },
+                    },
+                  ],
+                },
+              },
+              worktree: undefined,
+              url: 'https://github.com/example/test-repo.git',
+              gitdir: ospath.join(workDir, 'gitdir'),
+              refname: 'main',
+              reftype: 'branch',
+            },
+          ],
+        },
+      ]
+
+      ext.register.call(context, { playbook })
+      await context.contentAggregated({ playbook, contentAggregate })
+
+      const warnMessages = context.messages.filter((m) => m.level === 'warn')
+      expect(warnMessages.some((m) => m.msg.includes('Skipping invalid entry'))).to.be.true()
+      const debugMessages = context.messages.filter((m) => m.level === 'debug')
+      expect(debugMessages.some((m) => m.msg.includes('Entry structure'))).to.be.true()
+    })
+
+    it('should create collector cache dir when cloning with undefined cacheDir', async () => {
+      const mockGit = createMockGit()
+      const context = createGeneratorContext({ git: mockGit })
+
+      // Playbook with undefined cacheDir - clone path should use default and create dir
+      const playbookWithoutCacheDir = {
+        dir: playbookDir,
+        runtime: {}, // cacheDir is undefined
+      }
+
+      const contentAggregate = [
+        {
+          name: 'test-component',
+          origins: [
+            {
+              descriptor: {
+                ext: {
+                  collectorCache: [
+                    {
+                      run: {
+                        key: 'build',
+                        sources: ['src/main.c'],
+                        cachedir: 'build/output',
+                        command: 'echo "building"',
+                      },
+                    },
+                  ],
+                },
+              },
+              worktree: undefined,
+              url: 'https://github.com/example/test-repo.git',
+              gitdir: ospath.join(workDir, 'gitdir'),
+              refname: 'main',
+              reftype: 'branch',
+            },
+          ],
+        },
+      ]
+
+      ext.register.call(context, { playbook: playbookWithoutCacheDir })
+      await context.contentAggregated({ playbook: playbookWithoutCacheDir, contentAggregate })
+
+      // Should have called clone (which creates the cache dir)
+      expect(mockGit.clone).to.have.been.called()
+    })
+
+    it('should use origin.branch when refname is not set', async () => {
+      const mockGit = createMockGit()
+      const context = createGeneratorContext({ git: mockGit })
+
+      const contentAggregate = [
+        {
+          name: 'test-component',
+          origins: [
+            {
+              descriptor: {
+                ext: {
+                  collectorCache: [
+                    {
+                      run: {
+                        key: 'build',
+                        sources: ['src/main.c'],
+                        cachedir: 'build/output',
+                        command: 'echo "building"',
+                      },
+                    },
+                  ],
+                },
+              },
+              worktree: undefined,
+              url: 'https://github.com/example/test-repo.git',
+              gitdir: ospath.join(workDir, 'gitdir'),
+              refname: undefined,
+              branch: 'develop',
+              reftype: 'branch',
+            },
+          ],
+        },
+      ]
+
+      ext.register.call(context, { playbook })
+      await context.contentAggregated({ playbook, contentAggregate })
+
+      expect(mockGit.clone).to.have.been.called()
+    })
+
+    it('should use origin.tag when refname and branch are not set', async () => {
+      const mockGit = createMockGit()
+      const context = createGeneratorContext({ git: mockGit })
+
+      const contentAggregate = [
+        {
+          name: 'test-component',
+          origins: [
+            {
+              descriptor: {
+                ext: {
+                  collectorCache: [
+                    {
+                      run: {
+                        key: 'build',
+                        sources: ['src/main.c'],
+                        cachedir: 'build/output',
+                        command: 'echo "building"',
+                      },
+                    },
+                  ],
+                },
+              },
+              worktree: undefined,
+              url: 'https://github.com/example/test-repo.git',
+              gitdir: ospath.join(workDir, 'gitdir'),
+              refname: undefined,
+              branch: undefined,
+              tag: 'v1.0.0',
+              reftype: 'tag',
+            },
+          ],
+        },
+      ]
+
+      ext.register.call(context, { playbook })
+      await context.contentAggregated({ playbook, contentAggregate })
+
+      expect(mockGit.clone).to.have.been.called()
+    })
+
+    it('should use HEAD when no ref info is available', async () => {
+      const mockGit = createMockGit()
+      const context = createGeneratorContext({ git: mockGit })
+
+      const contentAggregate = [
+        {
+          name: 'test-component',
+          origins: [
+            {
+              descriptor: {
+                ext: {
+                  collectorCache: [
+                    {
+                      run: {
+                        key: 'build',
+                        sources: ['src/main.c'],
+                        cachedir: 'build/output',
+                        command: 'echo "building"',
+                      },
+                    },
+                  ],
+                },
+              },
+              worktree: undefined,
+              url: 'https://github.com/example/test-repo.git',
+              gitdir: ospath.join(workDir, 'gitdir'),
+              refname: undefined,
+              branch: undefined,
+              tag: undefined,
+              reftype: 'branch',
+            },
+          ],
+        },
+      ]
+
+      ext.register.call(context, { playbook })
+      await context.contentAggregated({ playbook, contentAggregate })
+
+      expect(mockGit.clone).to.have.been.called()
+    })
+
     it('should initialize submodules after cloning', async () => {
       const mockGit = createMockGit()
       const context = createGeneratorContext({ git: mockGit })
@@ -2082,6 +2209,47 @@ describe('collector-cache-extension', () => {
       // Should not error even if submodule init fails
       const errorMessages = context.messages.filter((m) => m.level === 'error')
       expect(errorMessages.filter((m) => m.msg.includes('submodule'))).to.have.lengthOf(0)
+    })
+
+    it('should warn when no URL or worktree available', async () => {
+      const mockGit = createMockGit()
+      const context = createGeneratorContext({ git: mockGit })
+
+      const contentAggregate = [
+        {
+          name: 'test-component',
+          origins: [
+            {
+              descriptor: {
+                ext: {
+                  collectorCache: [
+                    {
+                      run: {
+                        key: 'build',
+                        sources: ['src/main.c'],
+                        cachedir: 'build/output',
+                        command: 'echo "building"',
+                      },
+                    },
+                  ],
+                },
+              },
+              // No worktree and no URL
+              worktree: undefined,
+              url: undefined,
+              gitdir: ospath.join(workDir, 'gitdir'),
+              refname: 'main',
+              reftype: 'branch',
+            },
+          ],
+        },
+      ]
+
+      ext.register.call(context, { playbook })
+      await context.contentAggregated({ playbook, contentAggregate })
+
+      const warnMessages = context.messages.filter((m) => m.level === 'warn')
+      expect(warnMessages.some((m) => m.msg.includes('No URL or worktree available'))).to.be.true()
     })
 
     it('should handle git clone failure', async () => {
@@ -2376,6 +2544,62 @@ describe('collector-cache-extension', () => {
       expect(debugMessages.some((m) => m.msg.includes('Found worktree'))).to.be.true()
     })
 
+    it('should find worktree created during build in beforePublish', async () => {
+      const mockGit = createMockGit()
+      const context = createGeneratorContext({ git: mockGit })
+
+      // DON'T create worktree before contentAggregated - let it clone
+      const contentAggregate = [
+        {
+          name: 'test-component',
+          origins: [
+            {
+              descriptor: {
+                ext: {
+                  collectorCache: [
+                    {
+                      run: {
+                        key: 'build',
+                        sources: ['src/main.c'],
+                        cachedir: 'build/output',
+                        command: 'echo "building"',
+                      },
+                    },
+                  ],
+                },
+              },
+              worktree: undefined,
+              url: 'https://github.com/example/test-repo.git',
+              gitdir: ospath.join(workDir, 'gitdir'),
+              refname: 'main',
+              reftype: 'branch',
+            },
+          ],
+        },
+      ]
+
+      ext.register.call(context, { playbook })
+      await context.contentAggregated({ playbook, contentAggregate })
+
+      // NOW create the worktree that "would have been created by collector"
+      // Use the prefix pattern that beforePublish will look for
+      const collectorCacheDir = ospath.join(playbookDir, '.cache/antora/collector')
+      const worktreeName = 'test-repo@main-simulated123'
+      const collectorWorktree = ospath.join(collectorCacheDir, worktreeName)
+      fs.mkdirSync(collectorWorktree, { recursive: true })
+      createSourceFile(collectorWorktree, 'src/main.c', 'int main() {}')
+      createSourceFile(collectorWorktree, 'build/output/result.txt', 'build result')
+
+      await context.beforePublish({ playbook })
+
+      // Should find worktree, compute hashes, and cache outputs
+      const debugMessages = context.messages.filter((m) => m.level === 'debug')
+      expect(debugMessages.some((m) => m.msg.includes('Found worktree for caching'))).to.be.true()
+
+      const infoMessages = context.messages.filter((m) => m.level === 'info')
+      expect(infoMessages.some((m) => m.msg.includes('Cached outputs'))).to.be.true()
+    })
+
     it('should warn when worktree not found in beforePublish', async () => {
       const mockGit = createMockGit()
       const context = createGeneratorContext({ git: mockGit })
@@ -2466,6 +2690,827 @@ describe('collector-cache-extension', () => {
       // Should have cached outputs
       const infoMessages = context.messages.filter((m) => m.level === 'info')
       expect(infoMessages.some((m) => m.msg.includes('Cached outputs'))).to.be.true()
+    })
+
+    it('should handle tag reftype in updateWorktree', async () => {
+      const mockGit = createMockGit()
+      const context = createGeneratorContext({ git: mockGit })
+
+      const remoteWorktree = ospath.join(workDir, 'remote-worktree')
+      fs.mkdirSync(remoteWorktree, { recursive: true })
+      createSourceFile(remoteWorktree, 'src/main.c', 'int main() {}')
+
+      const contentAggregate = [
+        {
+          name: 'test-component',
+          origins: [
+            {
+              descriptor: {
+                ext: {
+                  collectorCache: [
+                    {
+                      run: {
+                        key: 'build',
+                        sources: ['src/main.c'],
+                        cachedir: 'build/output',
+                        command: 'echo "building"',
+                      },
+                    },
+                  ],
+                },
+              },
+              worktree: remoteWorktree,
+              gitdir: ospath.join(workDir, 'remote-gitdir'),
+              refname: 'v1.0.0',
+              reftype: 'tag',
+              url: 'https://github.com/example/test-repo.git',
+              remote: 'origin',
+            },
+          ],
+        },
+      ]
+
+      ext.register.call(context, { playbook })
+      await context.contentAggregated({ playbook, contentAggregate })
+
+      // Should have called fetch and checkout for tag
+      expect(mockGit.fetch).to.have.been.called()
+      expect(mockGit.checkout).to.have.been.called()
+    })
+
+    it('should skip branch creation for tag refs', async () => {
+      const mockGit = createMockGit({
+        listBranches: spy(async () => []),
+      })
+      const context = createGeneratorContext({ git: mockGit })
+
+      const remoteWorktree = ospath.join(workDir, 'remote-worktree')
+      fs.mkdirSync(remoteWorktree, { recursive: true })
+      createSourceFile(remoteWorktree, 'src/main.c', 'int main() {}')
+
+      const contentAggregate = [
+        {
+          name: 'test-component',
+          origins: [
+            {
+              descriptor: {
+                ext: {
+                  collectorCache: [
+                    {
+                      run: {
+                        key: 'build',
+                        sources: ['src/main.c'],
+                        cachedir: 'build/output',
+                        command: 'echo "building"',
+                      },
+                    },
+                  ],
+                },
+              },
+              worktree: remoteWorktree,
+              gitdir: ospath.join(workDir, 'remote-gitdir'),
+              refname: 'v1.0.0',
+              reftype: 'tag',
+              url: 'https://github.com/example/test-repo.git',
+              remote: 'origin',
+            },
+          ],
+        },
+      ]
+
+      ext.register.call(context, { playbook })
+      await context.contentAggregated({ playbook, contentAggregate })
+
+      // Should NOT create branch for tag refs (branch creation is only for heads refs)
+      expect(mockGit.branch).to.not.have.been.called()
+    })
+
+    it('should handle beforePublish when collectorCacheDir does not exist', async () => {
+      const mockGit = createMockGit()
+      const context = createGeneratorContext({ git: mockGit })
+
+      // Don't create the collector cache directory - it won't exist
+      const contentAggregate = [
+        {
+          name: 'test-component',
+          origins: [
+            {
+              descriptor: {
+                ext: {
+                  collectorCache: [
+                    {
+                      run: {
+                        key: 'build',
+                        sources: ['src/main.c'],
+                        cachedir: 'build/output',
+                        command: 'echo "building"',
+                      },
+                    },
+                  ],
+                },
+              },
+              worktree: undefined,
+              url: 'https://github.com/example/test-repo.git',
+              gitdir: ospath.join(workDir, 'gitdir'),
+              refname: 'main',
+              reftype: 'branch',
+            },
+          ],
+        },
+      ]
+
+      ext.register.call(context, { playbook })
+      await context.contentAggregated({ playbook, contentAggregate })
+
+      // Delete the collector cache dir that was created during clone
+      const collectorCacheDir = ospath.join(playbookDir, '.cache/antora/collector')
+      if (fs.existsSync(collectorCacheDir)) {
+        fs.rmSync(collectorCacheDir, { recursive: true })
+      }
+
+      await context.beforePublish({ playbook })
+
+      // Should warn that worktree not found
+      const warnMessages = context.messages.filter((m) => m.level === 'warn')
+      expect(warnMessages.some((m) => m.msg.includes('Worktree not found'))).to.be.true()
+    })
+
+    it('should use default cacheDir when playbook.runtime.cacheDir is undefined', async () => {
+      const mockGit = createMockGit()
+      const context = createGeneratorContext({ git: mockGit })
+
+      // Create collector cache in default location
+      const collectorCacheDir = ospath.join(playbookDir, '.cache/antora/collector')
+      const worktreeName = 'test-repo@main-abc123'
+      const collectorWorktree = ospath.join(collectorCacheDir, worktreeName)
+      fs.mkdirSync(collectorWorktree, { recursive: true })
+      createSourceFile(collectorWorktree, 'src/main.c', 'int main() {}')
+      createSourceFile(collectorWorktree, 'build/output/result.txt', 'build result')
+
+      // Playbook with undefined cacheDir (should use default '.cache/antora')
+      const playbookWithoutCacheDir = {
+        dir: playbookDir,
+        runtime: {}, // cacheDir is undefined
+      }
+
+      const contentAggregate = [
+        {
+          name: 'test-component',
+          origins: [
+            {
+              descriptor: {
+                ext: {
+                  collectorCache: [
+                    {
+                      run: {
+                        key: 'build',
+                        sources: ['src/main.c'],
+                        cachedir: 'build/output',
+                        command: 'echo "building"',
+                      },
+                    },
+                  ],
+                },
+              },
+              worktree: undefined,
+              url: 'https://github.com/example/test-repo.git',
+              gitdir: ospath.join(workDir, 'gitdir'),
+              refname: 'main',
+              reftype: 'branch',
+            },
+          ],
+        },
+      ]
+
+      ext.register.call(context, { playbook: playbookWithoutCacheDir })
+      await context.contentAggregated({ playbook: playbookWithoutCacheDir, contentAggregate })
+
+      // Should find worktree using default cache dir
+      const debugMessages = context.messages.filter((m) => m.level === 'debug')
+      expect(debugMessages.some((m) => m.msg.includes('Found worktree'))).to.be.true()
+    })
+
+    it('should use custom cacheDir from playbook.runtime', async () => {
+      const mockGit = createMockGit()
+      const context = createGeneratorContext({ git: mockGit })
+
+      // Create custom cache dir with worktree
+      const customCacheDir = 'custom-cache'
+      const collectorCacheDir = ospath.join(playbookDir, customCacheDir, 'collector')
+      const worktreeName = 'test-repo@main-abc123'
+      const collectorWorktree = ospath.join(collectorCacheDir, worktreeName)
+      fs.mkdirSync(collectorWorktree, { recursive: true })
+      createSourceFile(collectorWorktree, 'src/main.c', 'int main() {}')
+      createSourceFile(collectorWorktree, 'build/output/result.txt', 'build result')
+
+      const customPlaybook = {
+        dir: playbookDir,
+        runtime: { cacheDir: customCacheDir },
+      }
+
+      const contentAggregate = [
+        {
+          name: 'test-component',
+          origins: [
+            {
+              descriptor: {
+                ext: {
+                  collectorCache: [
+                    {
+                      run: {
+                        key: 'build',
+                        sources: ['src/main.c'],
+                        cachedir: 'build/output',
+                        command: 'echo "building"',
+                      },
+                    },
+                  ],
+                },
+              },
+              worktree: undefined,
+              url: 'https://github.com/example/test-repo.git',
+              gitdir: ospath.join(workDir, 'gitdir'),
+              refname: 'main',
+              reftype: 'branch',
+            },
+          ],
+        },
+      ]
+
+      ext.register.call(context, { playbook: customPlaybook })
+      await context.contentAggregated({ playbook: customPlaybook, contentAggregate })
+
+      // Should find worktree in custom cache dir
+      const debugMessages = context.messages.filter((m) => m.level === 'debug')
+      expect(debugMessages.some((m) => m.msg.includes('Found worktree'))).to.be.true()
+    })
+
+    it('should handle entry without scan property', async () => {
+      const mockGit = createMockGit()
+      const context = createGeneratorContext({ git: mockGit })
+
+      // Set up cache with valid pointer and outputs
+      const cacheDir = ospath.join(playbookDir, '.cache/antora/collector-cache')
+      const componentHashDir = ospath.join(cacheDir, 'hashes', 'test-component', 'build')
+      fs.mkdirSync(componentHashDir, { recursive: true })
+
+      // Create pointer file
+      const contentHash = 'abc123def456'
+      const pointer = { outputDir: contentHash, sources: { 'src/main.c': 'hash123' } }
+      fs.writeFileSync(ospath.join(componentHashDir, 'pointer.json'), JSON.stringify(pointer))
+
+      // Create cached outputs
+      const outputsDir = ospath.join(cacheDir, 'outputs', contentHash, 'build/output')
+      fs.mkdirSync(outputsDir, { recursive: true })
+      createSourceFile(outputsDir, 'result.txt', 'cached output')
+
+      // Create worktree with sources
+      createSourceFile(worktreeDir, 'src/main.c', 'int main() {}')
+
+      const contentAggregate = [
+        {
+          name: 'test-component',
+          origins: [
+            {
+              descriptor: {
+                ext: {
+                  collectorCache: [
+                    {
+                      run: {
+                        key: 'build',
+                        sources: ['src/main.c'],
+                        cachedir: 'build/output',
+                        command: 'echo "building"',
+                      },
+                      // No scan property - should still work
+                    },
+                  ],
+                },
+              },
+              worktree: worktreeDir,
+              gitdir: ospath.join(worktreeDir, '.git'),
+            },
+          ],
+        },
+      ]
+
+      ext.register.call(context, { playbook })
+      await context.contentAggregated({ playbook, contentAggregate })
+
+      // Should process without errors
+      const errorMessages = context.messages.filter((m) => m.level === 'error')
+      expect(errorMessages).to.have.lengthOf(0)
+    })
+
+    it('should warn when sources still not found in beforePublish', async () => {
+      const mockGit = createMockGit()
+      const context = createGeneratorContext({ git: mockGit })
+
+      // Set up collector cache with worktree but NO source files
+      const collectorCacheDir = ospath.join(playbookDir, '.cache/antora/collector')
+      const worktreeName = 'test-repo@main-abc123'
+      const collectorWorktree = ospath.join(collectorCacheDir, worktreeName)
+      fs.mkdirSync(collectorWorktree, { recursive: true })
+      // Don't create src/main.c - sources will not be found
+      createSourceFile(collectorWorktree, 'build/output/result.txt', 'build result')
+
+      const contentAggregate = [
+        {
+          name: 'test-component',
+          origins: [
+            {
+              descriptor: {
+                ext: {
+                  collectorCache: [
+                    {
+                      run: {
+                        key: 'build',
+                        sources: ['src/main.c'],
+                        cachedir: 'build/output',
+                        command: 'echo "building"',
+                      },
+                    },
+                  ],
+                },
+              },
+              worktree: undefined,
+              url: 'https://github.com/example/test-repo.git',
+              gitdir: ospath.join(workDir, 'gitdir'),
+              refname: 'main',
+              reftype: 'branch',
+            },
+          ],
+        },
+      ]
+
+      ext.register.call(context, { playbook })
+      await context.contentAggregated({ playbook, contentAggregate })
+      await context.beforePublish({ playbook })
+
+      const warnMessages = context.messages.filter((m) => m.level === 'warn')
+      expect(warnMessages.some((m) => m.msg.includes('Source files still not found'))).to.be.true()
+    })
+
+    it('should create new branch when it does not exist in updateWorktree', async () => {
+      // Mock git to return empty branches list
+      const mockGit = createMockGit({
+        listBranches: spy(async () => []), // No branches exist
+      })
+      const context = createGeneratorContext({ git: mockGit })
+
+      const remoteWorktree = ospath.join(workDir, 'remote-worktree')
+      fs.mkdirSync(remoteWorktree, { recursive: true })
+      createSourceFile(remoteWorktree, 'src/main.c', 'int main() {}')
+
+      const contentAggregate = [
+        {
+          name: 'test-component',
+          origins: [
+            {
+              descriptor: {
+                ext: {
+                  collectorCache: [
+                    {
+                      run: {
+                        key: 'build',
+                        sources: ['src/main.c'],
+                        cachedir: 'build/output',
+                        command: 'echo "building"',
+                      },
+                    },
+                  ],
+                },
+              },
+              worktree: remoteWorktree,
+              gitdir: ospath.join(workDir, 'remote-gitdir'),
+              refname: 'main',
+              reftype: 'branch',
+              url: 'https://github.com/example/test-repo.git',
+              remote: 'origin',
+            },
+          ],
+        },
+      ]
+
+      ext.register.call(context, { playbook })
+      await context.contentAggregated({ playbook, contentAggregate })
+
+      // Should create new branch
+      expect(mockGit.branch).to.have.been.called()
+      const debugMessages = context.messages.filter((m) => m.level === 'debug')
+      expect(debugMessages.some((m) => m.msg.includes('Creating local branch'))).to.be.true()
+    })
+  })
+
+  describe('error handling', () => {
+    it('should handle error during entry processing', async () => {
+      // Use proxyquire to mock computeContentHash to throw
+      const mockError = new Error('Hash computation failed')
+      const extWithThrowingHash = proxyquire('../lib/collector-cache-extension', {
+        './utils/hash': {
+          computeHashes: () => ({ 'src/main.c': 'abc123' }),
+          computeContentHash: () => {
+            throw mockError
+          },
+          '@noCallThru': true,
+        },
+      })
+
+      const mockGit = createMockGit()
+      const context = createGeneratorContext({ git: mockGit })
+
+      createSourceFile(worktreeDir, 'src/main.c', 'int main() {}')
+
+      const contentAggregate = [
+        {
+          name: 'test-component',
+          origins: [
+            {
+              descriptor: {
+                ext: {
+                  collectorCache: [
+                    {
+                      run: {
+                        key: 'build',
+                        sources: ['src/main.c'],
+                        cachedir: 'build/output',
+                        command: 'echo "building"',
+                      },
+                      scan: { dir: 'build/output', files: '**/*' },
+                    },
+                  ],
+                },
+              },
+              worktree: worktreeDir,
+              gitdir: ospath.join(worktreeDir, '.git'),
+            },
+          ],
+        },
+      ]
+
+      extWithThrowingHash.register.call(context, { playbook })
+      await context.contentAggregated({ playbook, contentAggregate })
+
+      // Should log error but still add entry to collector
+      const errorMessages = context.messages.filter((m) => m.level === 'error')
+      expect(errorMessages.some((m) => m.msg.includes('Error processing entry'))).to.be.true()
+      expect(contentAggregate[0].origins[0].descriptor.ext.collector.length).to.be.greaterThan(0)
+    })
+
+    it('should handle error during beforePublish cache update', async () => {
+      // Use proxyquire to mock copyDirectory to throw
+      const mockError = new Error('Copy failed: permission denied')
+      const extWithThrowingCopy = proxyquire('../lib/collector-cache-extension', {
+        './utils/fs': {
+          checkOutputsExist: () => false,
+          copyDirectory: () => {
+            throw mockError
+          },
+          '@noCallThru': true,
+        },
+      })
+
+      const mockGit = createMockGit()
+      const context = createGeneratorContext({ git: mockGit })
+
+      createSourceFile(worktreeDir, 'src/main.c', 'int main() {}')
+      createSourceFile(worktreeDir, 'build/output/result.txt', 'output')
+
+      const contentAggregate = [
+        {
+          name: 'test-component',
+          origins: [
+            {
+              descriptor: {
+                ext: {
+                  collectorCache: [
+                    {
+                      run: {
+                        key: 'build',
+                        sources: ['src/main.c'],
+                        cachedir: 'build/output',
+                        command: 'echo "building"',
+                      },
+                    },
+                  ],
+                },
+              },
+              worktree: worktreeDir,
+              gitdir: ospath.join(worktreeDir, '.git'),
+            },
+          ],
+        },
+      ]
+
+      extWithThrowingCopy.register.call(context, { playbook })
+      await context.contentAggregated({ playbook, contentAggregate })
+      await context.beforePublish({ playbook })
+
+      // Should log error
+      const errorMessages = context.messages.filter((m) => m.level === 'error')
+      expect(errorMessages.some((m) => m.msg.includes('Failed to update cache'))).to.be.true()
+    })
+  })
+
+  describe('worktree discovery and initialization', () => {
+    it('should reuse existing worktree from collector cache when worktree is undefined', async () => {
+      // Set up collector cache with matching worktree prefix
+      const collectorCacheDir = ospath.join(playbookDir, '.cache/antora/collector')
+      // Create worktree with correct naming pattern: repo@refname-hash
+      const existingWorktree = ospath.join(collectorCacheDir, 'test-repo@feature-branch-abc123def456')
+      fs.mkdirSync(existingWorktree, { recursive: true })
+      createSourceFile(existingWorktree, 'src/main.c', 'int main() {}')
+
+      const origin = {
+        descriptor: {
+          ext: {
+            collectorCache: [
+              {
+                run: {
+                  key: 'build',
+                  sources: ['src/main.c'],
+                  cachedir: 'build/output',
+                  command: 'echo "building"',
+                },
+              },
+            ],
+          },
+        },
+        // Worktree is undefined to trigger early lookup
+        worktree: undefined,
+        url: 'https://github.com/example/test-repo.git',
+        gitdir: ospath.join(workDir, 'gitdir'),
+        refname: 'feature-branch',
+        reftype: 'branch',
+      }
+
+      const contentAggregate = [
+        {
+          name: 'test-component',
+          origins: [origin],
+        },
+      ]
+
+      ext.register.call(generatorContext, { playbook })
+      await generatorContext.contentAggregated({ playbook, contentAggregate })
+
+      // Should find worktree via early lookup and set origin.worktree
+      expect(origin.worktree).to.equal(existingWorktree)
+
+      // Should log that worktree was found (the specific message at line 98)
+      const debugMessages = generatorContext.messages.filter((m) => m.level === 'debug')
+      expect(debugMessages.some((m) => m.msg.includes('Found worktree:'))).to.be.true()
+    })
+
+    it('should proceed to clone when collector cache exists but has no matching entries', async () => {
+      const mockGit = createMockGit()
+      const context = createGeneratorContext({ git: mockGit })
+
+      // Create collector cache dir but with NON-matching worktree
+      const collectorCacheDir = ospath.join(playbookDir, '.cache/antora/collector')
+      const nonMatchingWorktree = ospath.join(collectorCacheDir, 'different-repo@other-branch-xyz')
+      fs.mkdirSync(nonMatchingWorktree, { recursive: true })
+
+      const contentAggregate = [
+        {
+          name: 'test-component',
+          origins: [
+            {
+              descriptor: {
+                ext: {
+                  collectorCache: [
+                    {
+                      run: {
+                        key: 'build',
+                        sources: ['src/main.c'],
+                        cachedir: 'build/output',
+                        command: 'echo "building"',
+                      },
+                    },
+                  ],
+                },
+              },
+              worktree: undefined,
+              url: 'https://github.com/example/test-repo.git',
+              gitdir: ospath.join(workDir, 'gitdir'),
+              refname: 'main',
+              reftype: 'branch',
+            },
+          ],
+        },
+      ]
+
+      ext.register.call(context, { playbook })
+      await context.contentAggregated({ playbook, contentAggregate })
+
+      // Should proceed to clone since no matching entry was found
+      expect(mockGit.clone).to.have.been.called()
+    })
+
+    it('should preserve existing collector array when already initialized', async () => {
+      createSourceFile(worktreeDir, 'src/main.c', 'int main() {}')
+
+      const existingCollectorEntry = { run: { command: 'existing' }, scan: { dir: 'docs' } }
+      const origin = {
+        descriptor: {
+          ext: {
+            collectorCache: [
+              {
+                run: {
+                  key: 'build',
+                  sources: ['src/main.c'],
+                  cachedir: 'build/output',
+                  command: 'echo "building"',
+                },
+              },
+            ],
+            collector: [existingCollectorEntry], // Pre-initialized collector array
+          },
+        },
+        worktree: worktreeDir,
+        gitdir: ospath.join(worktreeDir, '.git'),
+      }
+
+      const contentAggregate = [
+        {
+          name: 'test-component',
+          origins: [origin],
+        },
+      ]
+
+      ext.register.call(generatorContext, { playbook })
+      await generatorContext.contentAggregated({ playbook, contentAggregate })
+
+      // Existing collector entry should still be present
+      expect(origin.descriptor.ext.collector).to.include(existingCollectorEntry)
+    })
+  })
+
+  describe('cache directory initialization', () => {
+    it('should use existing collector cache directory when cloning', async () => {
+      const mockGit = createMockGit()
+      const context = createGeneratorContext({ git: mockGit })
+
+      // Pre-create the collector cache directory (but empty, no matching worktrees)
+      const collectorCacheDir = ospath.join(playbookDir, '.cache/antora/collector')
+      fs.mkdirSync(collectorCacheDir, { recursive: true })
+
+      const contentAggregate = [
+        {
+          name: 'test-component',
+          origins: [
+            {
+              descriptor: {
+                ext: {
+                  collectorCache: [
+                    {
+                      run: {
+                        key: 'build',
+                        sources: ['src/main.c'],
+                        cachedir: 'build/output',
+                        command: 'echo "building"',
+                      },
+                    },
+                  ],
+                },
+              },
+              worktree: undefined,
+              url: 'https://github.com/example/test-repo.git',
+              gitdir: ospath.join(workDir, 'gitdir'),
+              refname: 'main',
+              reftype: 'branch',
+            },
+          ],
+        },
+      ]
+
+      ext.register.call(context, { playbook })
+      await context.contentAggregated({ playbook, contentAggregate })
+
+      // Should have called clone (cache dir existed, so no need to create it)
+      expect(mockGit.clone).to.have.been.called()
+    })
+
+    it('should create collector cache directory when cloning to fresh location', async () => {
+      const mockGit = createMockGit()
+      const context = createGeneratorContext({ git: mockGit })
+
+      // Use a completely fresh cache dir that definitely doesn't exist
+      const freshPlaybookDir = ospath.join(workDir, 'fresh-playbook')
+      fs.mkdirSync(freshPlaybookDir, { recursive: true })
+      const freshPlaybook = {
+        dir: freshPlaybookDir,
+        runtime: { cacheDir: 'brand-new-cache' },
+      }
+
+      const contentAggregate = [
+        {
+          name: 'test-component',
+          origins: [
+            {
+              descriptor: {
+                ext: {
+                  collectorCache: [
+                    {
+                      run: {
+                        key: 'build',
+                        sources: ['src/main.c'],
+                        cachedir: 'build/output',
+                        command: 'echo "building"',
+                      },
+                    },
+                  ],
+                },
+              },
+              worktree: undefined,
+              url: 'https://github.com/example/new-repo.git',
+              gitdir: ospath.join(workDir, 'new-gitdir'),
+              refname: 'main',
+              reftype: 'branch',
+            },
+          ],
+        },
+      ]
+
+      // Verify the cache dir doesn't exist before
+      const collectorCacheDir = ospath.join(freshPlaybookDir, 'brand-new-cache', 'collector')
+      expect(fs.existsSync(collectorCacheDir)).to.be.false()
+
+      ext.register.call(context, { playbook: freshPlaybook })
+      await context.contentAggregated({ playbook: freshPlaybook, contentAggregate })
+
+      // Should have called clone
+      expect(mockGit.clone).to.have.been.called()
+
+      // Cache dir should now exist (created by the extension)
+      expect(fs.existsSync(collectorCacheDir)).to.be.true()
+    })
+  })
+
+  describe('cache hit behavior', () => {
+    it('should skip scan entry creation when cache entry has no scan config', async () => {
+      const sourceContent = 'int main() { return 0; }'
+      createSourceFile(worktreeDir, 'src/main.c', sourceContent)
+
+      // Compute expected hash
+      const sourceHash = computeFileHash(sourceContent)
+      const contentHash = crypto.createHash('sha256').update(sourceHash).digest('hex')
+
+      // Create cache structure
+      const hashDir = ospath.join(playbookDir, '.cache/antora/collector-cache/hashes/test-component/build')
+      const outputDir = ospath.join(playbookDir, '.cache/antora/collector-cache/outputs', contentHash, 'build/output')
+      fs.mkdirSync(hashDir, { recursive: true })
+      fs.mkdirSync(outputDir, { recursive: true })
+
+      // Create pointer file
+      const pointer = {
+        outputDir: contentHash,
+        scanDir: 'build/output',
+        sources: { 'src/main.c': sourceHash },
+        timestamp: new Date().toISOString(),
+      }
+      fs.writeFileSync(ospath.join(hashDir, `${contentHash}.json`), JSON.stringify(pointer), 'utf8')
+
+      // Create a file in outputs
+      createSourceFile(outputDir, 'result.txt', 'build output')
+
+      const contentAggregate = [
+        {
+          name: 'test-component',
+          origins: [
+            {
+              descriptor: {
+                ext: {
+                  collectorCache: [
+                    {
+                      run: {
+                        key: 'build',
+                        sources: ['src/main.c'],
+                        cachedir: 'build/output',
+                        command: 'echo "building"',
+                      },
+                      // NO scan property - this should trigger line 355 branch to be false
+                    },
+                  ],
+                },
+              },
+              worktree: worktreeDir,
+              gitdir: ospath.join(worktreeDir, '.git'),
+            },
+          ],
+        },
+      ]
+
+      ext.register.call(generatorContext, { playbook })
+      await generatorContext.contentAggregated({ playbook, contentAggregate })
+
+      // Should report cache HIT
+      const infoMessages = generatorContext.messages.filter((m) => m.level === 'info')
+      expect(infoMessages.some((m) => m.msg.includes('Cache HIT'))).to.be.true()
+
+      // Collector should NOT have scan entries added since no scan property was defined
+      const collector = contentAggregate[0].origins[0].descriptor.ext.collector
+      expect(collector.length).to.equal(0)
     })
   })
 })
