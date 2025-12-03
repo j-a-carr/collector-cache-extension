@@ -125,9 +125,7 @@ describe('utils/sources', () => {
     })
 
     it('should resolve sources from dependencies', () => {
-      const entriesMap = new Map([
-        ['dep1', { key: 'dep1', sources: ['dep1.txt'], sourceCommands: [], dependsOn: [] }],
-      ])
+      const entriesMap = new Map([['dep1', { key: 'dep1', sources: ['dep1.txt'], sourceCommands: [], dependsOn: [] }]])
 
       const result = resolveDependencySources(entriesMap, ['dep1'], new Set())
       expect(result.sources).to.include('dep1.txt')
@@ -140,9 +138,7 @@ describe('utils/sources', () => {
         warn: (msg) => messages.push({ level: 'warn', msg }),
       }
 
-      const entriesMap = new Map([
-        ['dep1', { key: 'dep1', sources: ['dep1.txt'], sourceCommands: [], dependsOn: [] }],
-      ])
+      const entriesMap = new Map([['dep1', { key: 'dep1', sources: ['dep1.txt'], sourceCommands: [], dependsOn: [] }]])
 
       const result = resolveDependencySources(entriesMap, ['dep1'], new Set(), logger, 'comp', 'key')
       expect(result.sources).to.include('dep1.txt')
@@ -151,9 +147,7 @@ describe('utils/sources', () => {
     })
 
     it('should detect circular dependencies without logger', () => {
-      const entriesMap = new Map([
-        ['a', { key: 'a', sources: ['a.txt'], sourceCommands: [], dependsOn: ['b'] }],
-      ])
+      const entriesMap = new Map([['a', { key: 'a', sources: ['a.txt'], sourceCommands: [], dependsOn: ['b'] }]])
 
       const result = resolveDependencySources(entriesMap, ['a'], new Set(['a']))
       expect(result.sources).to.have.lengthOf(0)
@@ -165,9 +159,7 @@ describe('utils/sources', () => {
     })
 
     it('should handle dependency without sources property', () => {
-      const entriesMap = new Map([
-        ['dep1', { key: 'dep1', sourceCommands: ['cmd'], dependsOn: [] }],
-      ])
+      const entriesMap = new Map([['dep1', { key: 'dep1', sourceCommands: ['cmd'], dependsOn: [] }]])
 
       const result = resolveDependencySources(entriesMap, ['dep1'], new Set())
       expect(result.sources).to.have.lengthOf(0)
@@ -175,9 +167,7 @@ describe('utils/sources', () => {
     })
 
     it('should handle dependency without sourceCommands property', () => {
-      const entriesMap = new Map([
-        ['dep1', { key: 'dep1', sources: ['file.txt'], dependsOn: [] }],
-      ])
+      const entriesMap = new Map([['dep1', { key: 'dep1', sources: ['file.txt'], dependsOn: [] }]])
 
       const result = resolveDependencySources(entriesMap, ['dep1'], new Set())
       expect(result.sources).to.include('file.txt')
@@ -191,9 +181,7 @@ describe('utils/sources', () => {
         warn: (msg) => messages.push({ level: 'warn', msg }),
       }
 
-      const entriesMap = new Map([
-        ['dep1', { key: 'dep1', sources: ['dep1.txt'], sourceCommands: [], dependsOn: [] }],
-      ])
+      const entriesMap = new Map([['dep1', { key: 'dep1', sources: ['dep1.txt'], sourceCommands: [], dependsOn: [] }]])
 
       const result = resolveDependencySources(entriesMap, ['dep1'], new Set(), logger)
       expect(result.sources).to.include('dep1.txt')
@@ -248,11 +236,7 @@ describe('utils/sources', () => {
     })
 
     it('should skip entries without run.key', () => {
-      const entries = [
-        { run: { key: 'valid', sources: [] } },
-        { run: { sources: [] } },
-        { scan: {} },
-      ]
+      const entries = [{ run: { key: 'valid', sources: [] } }, { run: { sources: [] } }, { scan: {} }]
 
       const map = buildEntriesMap(entries)
       expect(map.size).to.equal(1)
@@ -260,9 +244,7 @@ describe('utils/sources', () => {
     })
 
     it('should use empty arrays for missing sources and sourceCommands', () => {
-      const entries = [
-        { run: { key: 'minimal' } },
-      ]
+      const entries = [{ run: { key: 'minimal' } }]
 
       const map = buildEntriesMap(entries)
       expect(map.get('minimal').sources).to.deep.equal([])

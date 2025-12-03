@@ -6,7 +6,12 @@ const fs = require('fs')
 const os = require('os')
 const ospath = require('node:path')
 const proxyquire = require('proxyquire')
-const { checkDirectoryHasFiles, checkOutputsExist, copyDirectory, findFilesMatchingPattern } = require('../../lib/utils/fs')
+const {
+  checkDirectoryHasFiles,
+  checkOutputsExist,
+  copyDirectory,
+  findFilesMatchingPattern,
+} = require('../../lib/utils/fs')
 
 describe('utils/fs', () => {
   let workDir

@@ -94,14 +94,12 @@ describe('collector-cache-extension', () => {
   let workDir
   let playbookDir
   let worktreeDir
-  let cacheDir
   let playbook
 
   beforeEach(() => {
     workDir = tempDir('collector-cache-extension-test-')
     playbookDir = ospath.join(workDir, 'playbook')
     worktreeDir = ospath.join(workDir, 'worktree')
-    cacheDir = ospath.join(playbookDir, '.cache/antora')
     fs.mkdirSync(playbookDir, { recursive: true })
     fs.mkdirSync(worktreeDir, { recursive: true })
     generatorContext = createGeneratorContext()
@@ -1123,8 +1121,9 @@ describe('collector-cache-extension', () => {
 
       // Should be cache MISS because outputs are empty
       const infoMessages = generatorContext.messages.filter((m) => m.level === 'info')
-      expect(infoMessages.some((m) => m.msg.includes('Cache MISS') && m.msg.includes('cached outputs missing'))).to.be
-        .true()
+      expect(
+        infoMessages.some((m) => m.msg.includes('Cache MISS') && m.msg.includes('cached outputs missing'))
+      ).to.be.true()
     })
 
     it('should handle output path that is a file not directory', async () => {
@@ -1824,7 +1823,6 @@ describe('collector-cache-extension', () => {
       const errorMessages = generatorContext.messages.filter((m) => m.level === 'error')
       expect(errorMessages).to.have.lengthOf(0)
     })
-
   })
 
   describe('collector array initialization', () => {
