@@ -9,7 +9,7 @@
     "url": "https://github.com/j-a-carr/collector-cache-extension/issues"
   },
   "engines": {
-    "node": ">=16.0.0"
+    "node": ">=18.0.0"
   },
   "scripts": {
     "build": "npm test && npm run lint",
