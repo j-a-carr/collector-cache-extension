@@ -4,9 +4,9 @@
   "description": "Content-addressable caching extension for Antora Collector",
   "license": "MPL-2.0",
   "author": "James Carr",
-  "repository": "github:carr-james/collector-cache-extension",
+  "repository": "github:j-a-carr/collector-cache-extension",
   "bugs": {
-    "url": "https://github.com/carr-james/collector-cache-extension/issues"
+    "url": "https://github.com/j-a-carr/collector-cache-extension/issues"
   },
   "engines": {
     "node": ">=16.0.0"
