@@ -3511,4 +3511,92 @@ describe('collector-cache-extension', () => {
       expect(collector.length).to.equal(0)
     })
   })
+
+  describe('cache persistence across consecutive runs', () => {
+    it('should restore cached outputs to worktree on cache HIT to preserve cache from destructive scan', async () => {
+      // Create source file
+      createSourceFile(worktreeDir, 'src/main.c', 'int main() { return 0; }')
+
+      // Create output directory with build results (simulating what command would produce)
+      const buildOutputDir = ospath.join(worktreeDir, 'target/output')
+      fs.mkdirSync(buildOutputDir, { recursive: true })
+      fs.writeFileSync(ospath.join(buildOutputDir, 'result.txt'), 'build output', 'utf8')
+
+      const contentAggregate = [
+        {
+          name: 'test-component',
+          origins: [
+            {
+              descriptor: {
+                ext: {
+                  collectorCache: [
+                    {
+                      run: {
+                        key: 'build',
+                        sources: ['src/main.c'],
+                        cachedir: 'target/output',
+                        command: 'echo "building"',
+                      },
+                      scan: {
+                        dir: 'target/output',
+                        files: '**/*',
+                      },
+                    },
+                  ],
+                },
+              },
+              worktree: worktreeDir,
+              gitdir: ospath.join(worktreeDir, '.git'),
+            },
+          ],
+        },
+      ]
+
+      // === RUN 1: Cache MISS - populate the cache ===
+      ext.register.call(generatorContext, { playbook })
+      await generatorContext.contentAggregated({ playbook, contentAggregate })
+      await generatorContext.beforePublish({ playbook })
+
+      const run1Messages = generatorContext.messages.filter((m) => m.level === 'info')
+      expect(run1Messages.some((m) => m.msg.includes('Cache MISS'))).to.be.true('Run 1 should be cache MISS')
+      expect(run1Messages.some((m) => m.msg.includes('Cached outputs'))).to.be.true('Run 1 should cache outputs')
+
+      // Verify cache was created
+      const cacheOutputsDir = ospath.join(playbookDir, '.cache/antora/collector-cache/outputs')
+      expect(fs.existsSync(cacheOutputsDir)).to.be.true('Cache outputs directory should exist after run 1')
+
+      // === RUN 2: Cache HIT - verify scan points to worktree (not cache) ===
+      // Reset collector array to simulate fresh run
+      contentAggregate[0].origins[0].descriptor.ext.collector = []
+
+      // Delete worktree outputs to ensure they get restored from cache
+      fs.rmSync(buildOutputDir, { recursive: true, force: true })
+      expect(fs.existsSync(buildOutputDir)).to.be.false('Worktree output should not exist before cache HIT')
+
+      const generatorContext2 = createGeneratorContext()
+      ext.register.call(generatorContext2, { playbook })
+      await generatorContext2.contentAggregated({ playbook, contentAggregate })
+
+      const run2Messages = generatorContext2.messages.filter((m) => m.level === 'info')
+      expect(run2Messages.some((m) => m.msg.includes('Cache HIT'))).to.be.true('Run 2 should be cache HIT')
+
+      // KEY ASSERTION: On cache HIT, outputs should be restored to worktree
+      // so collector scans from worktree (not cache), preserving the cache
+      expect(fs.existsSync(buildOutputDir)).to.be.true('Cached outputs should be restored to worktree on cache HIT')
+      expect(fs.existsSync(ospath.join(buildOutputDir, 'result.txt'))).to.be.true(
+        'Cached files should be restored to worktree'
+      )
+
+      // Verify the scan config points to worktree, not cache directory
+      const collector = contentAggregate[0].origins[0].descriptor.ext.collector
+      expect(collector.length).to.equal(1)
+      const scanConfig = collector[0].scan
+      expect(scanConfig).to.exist()
+
+      // The scan dir should be the worktree path (relative), not the cache path
+      // If scan.dir contains '.cache', the bug is present - collector will scan from cache
+      const scanDir = Array.isArray(scanConfig) ? scanConfig[0].dir : scanConfig.dir
+      expect(scanDir).to.not.include('.cache', 'Scan should point to worktree, not cache directory')
+    })
+  })
 })
