@@ -723,6 +723,19 @@ describe('collector-cache-extension', () => {
       // Verify cache was created
       const hashDir = ospath.join(playbookDir, '.cache/antora/collector-cache/hashes/test-component/build')
       expect(fs.existsSync(hashDir)).to.be.true()
+
+      // Verify pointer file contents
+      const sourceHash = crypto.createHash('sha256').update(sourceContent).digest('hex')
+      const contentHash = computeContentHashWithCommand(sourceHash, 'echo "building"')
+      const pointerPath = ospath.join(hashDir, `${contentHash}.json`)
+      expect(fs.existsSync(pointerPath)).to.be.true('pointer file should exist')
+
+      const pointer = JSON.parse(fs.readFileSync(pointerPath, 'utf8'))
+      expect(pointer.outputDir).to.equal(contentHash)
+      expect(pointer.scanDir).to.equal('build/output')
+      expect(pointer.sources).to.have.property('src/main.c', sourceHash)
+      expect(pointer.command).to.equal('echo "building"')
+      expect(pointer.timestamp).to.be.a('string')
     })
 
     it('should warn when output directory not found', async () => {
