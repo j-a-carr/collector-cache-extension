@@ -89,6 +89,13 @@ describe('collector-cache-extension', () => {
   }
 
   const computeFileHash = (content) => crypto.createHash('sha256').update(content).digest('hex')
+  const computeContentHashWithCommand = (sourceHash, command) => {
+    let combined = sourceHash
+    if (command) {
+      combined += command
+    }
+    return crypto.createHash('sha256').update(combined).digest('hex')
+  }
 
   let generatorContext
   let workDir
@@ -348,7 +355,7 @@ describe('collector-cache-extension', () => {
 
         // Compute expected hash
         const sourceHash = computeFileHash(sourceContent)
-        const contentHash = crypto.createHash('sha256').update(sourceHash).digest('hex')
+        const contentHash = computeContentHashWithCommand(sourceHash, 'echo "building"')
 
         // Create cache structure
         const hashDir = ospath.join(playbookDir, '.cache/antora/collector-cache/hashes/test-component/build')
@@ -403,6 +410,75 @@ describe('collector-cache-extension', () => {
 
         const infoMessages = generatorContext.messages.filter((m) => m.level === 'info')
         expect(infoMessages.some((m) => m.msg.includes('Cache HIT'))).to.be.true()
+      })
+
+      it('should report cache MISS when command changes but sources are the same', async () => {
+        // Create source file
+        const sourceContent = 'int main() { return 0; }'
+        createSourceFile(worktreeDir, 'src/main.c', sourceContent)
+
+        // Create output directory with build results (simulating what command would produce)
+        const buildOutputDir = ospath.join(worktreeDir, 'build/output')
+        fs.mkdirSync(buildOutputDir, { recursive: true })
+        fs.writeFileSync(ospath.join(buildOutputDir, 'result.txt'), 'build output from command A', 'utf8')
+
+        // === RUN 1: Build with command 'make build' - should be cache MISS and populate cache ===
+        const contentAggregate = [
+          {
+            name: 'test-component',
+            origins: [
+              {
+                descriptor: {
+                  ext: {
+                    collectorCache: [
+                      {
+                        run: {
+                          key: 'build',
+                          sources: ['src/main.c'],
+                          cachedir: 'build/output',
+                          command: 'make build',
+                        },
+                        scan: {
+                          dir: 'build/output',
+                          files: '**/*',
+                        },
+                      },
+                    ],
+                  },
+                },
+                worktree: worktreeDir,
+                gitdir: ospath.join(worktreeDir, '.git'),
+              },
+            ],
+          },
+        ]
+
+        ext.register.call(generatorContext, { playbook })
+        await generatorContext.contentAggregated({ playbook, contentAggregate })
+        await generatorContext.beforePublish({ playbook })
+
+        const run1Messages = generatorContext.messages.filter((m) => m.level === 'info')
+        expect(run1Messages.some((m) => m.msg.includes('Cache MISS'))).to.be.true('Run 1 should be cache MISS')
+        expect(run1Messages.some((m) => m.msg.includes('Cached outputs'))).to.be.true('Run 1 should cache outputs')
+
+        // === RUN 2: Same sources, but DIFFERENT command 'make debug' ===
+        // Reset collector array for fresh run
+        contentAggregate[0].origins[0].descriptor.ext.collector = []
+        // Change the command
+        contentAggregate[0].origins[0].descriptor.ext.collectorCache[0].run.command = 'make debug'
+
+        const generatorContext2 = createGeneratorContext()
+        ext.register.call(generatorContext2, { playbook })
+        await generatorContext2.contentAggregated({ playbook, contentAggregate })
+
+        // Should be cache MISS because command changed (even though sources are the same)
+        const run2Messages = generatorContext2.messages.filter((m) => m.level === 'info')
+        expect(run2Messages.some((m) => m.msg.includes('Cache MISS'))).to.be.true(
+          'Should be cache MISS when command changes'
+        )
+        expect(run2Messages.some((m) => m.msg.includes('Cache HIT'))).to.be.false(
+          'Should NOT be cache HIT when command changes'
+        )
       })
     })
 
@@ -551,7 +627,7 @@ describe('collector-cache-extension', () => {
 
         // Set up cache that would normally HIT
         const sourceHash = computeFileHash(sourceContent)
-        const contentHash = crypto.createHash('sha256').update(sourceHash).digest('hex')
+        const contentHash = computeContentHashWithCommand(sourceHash, 'echo "building"')
 
         const hashDir = ospath.join(playbookDir, '.cache/antora/collector-cache/hashes/test-component/build')
         const outputDir = ospath.join(playbookDir, '.cache/antora/collector-cache/outputs', contentHash, 'build/output')
@@ -738,7 +814,7 @@ describe('collector-cache-extension', () => {
 
       // Set up cache HIT
       const sourceHash = computeFileHash(sourceContent)
-      const contentHash = crypto.createHash('sha256').update(sourceHash).digest('hex')
+      const contentHash = computeContentHashWithCommand(sourceHash, 'echo "building"')
 
       const hashDir = ospath.join(playbookDir, '.cache/antora/collector-cache/hashes/test-component/build')
       const outputDir = ospath.join(playbookDir, '.cache/antora/collector-cache/outputs', contentHash, 'build/output')
@@ -913,7 +989,7 @@ describe('collector-cache-extension', () => {
 
       // Compute expected hash
       const sourceHash = computeFileHash(sourceContent)
-      const contentHash = crypto.createHash('sha256').update(sourceHash).digest('hex')
+      const contentHash = computeContentHashWithCommand(sourceHash, 'echo "building"')
 
       // Create cache structure with files to restore
       const hashDir = ospath.join(playbookDir, '.cache/antora/collector-cache/hashes/test-component/build')
@@ -980,7 +1056,7 @@ describe('collector-cache-extension', () => {
       createSourceFile(worktreeDir, 'src/main.c', sourceContent)
 
       const sourceHash = computeFileHash(sourceContent)
-      const contentHash = crypto.createHash('sha256').update(sourceHash).digest('hex')
+      const contentHash = computeContentHashWithCommand(sourceHash, 'echo "building"')
 
       const hashDir = ospath.join(playbookDir, '.cache/antora/collector-cache/hashes/test-component/build')
       const outputDir = ospath.join(playbookDir, '.cache/antora/collector-cache/outputs', contentHash, 'build/output')
@@ -1034,7 +1110,7 @@ describe('collector-cache-extension', () => {
       createSourceFile(worktreeDir, 'src/main.c', sourceContent)
 
       const sourceHash = computeFileHash(sourceContent)
-      const contentHash = crypto.createHash('sha256').update(sourceHash).digest('hex')
+      const contentHash = computeContentHashWithCommand(sourceHash, 'echo "building"')
 
       // Create invalid pointer file
       const hashDir = ospath.join(playbookDir, '.cache/antora/collector-cache/hashes/test-component/build')
@@ -1079,7 +1155,7 @@ describe('collector-cache-extension', () => {
       createSourceFile(worktreeDir, 'src/main.c', sourceContent)
 
       const sourceHash = computeFileHash(sourceContent)
-      const contentHash = crypto.createHash('sha256').update(sourceHash).digest('hex')
+      const contentHash = computeContentHashWithCommand(sourceHash, 'echo "building"')
 
       // Create cache structure with empty output directory
       const hashDir = ospath.join(playbookDir, '.cache/antora/collector-cache/hashes/test-component/build')
@@ -1131,7 +1207,7 @@ describe('collector-cache-extension', () => {
       createSourceFile(worktreeDir, 'src/main.c', sourceContent)
 
       const sourceHash = computeFileHash(sourceContent)
-      const contentHash = crypto.createHash('sha256').update(sourceHash).digest('hex')
+      const contentHash = computeContentHashWithCommand(sourceHash, 'echo "building"')
 
       // Create cache structure where output path is a file
       const hashDir = ospath.join(playbookDir, '.cache/antora/collector-cache/hashes/test-component/build')
@@ -1183,7 +1259,7 @@ describe('collector-cache-extension', () => {
       createSourceFile(worktreeDir, 'src/main.c', sourceContent)
 
       const sourceHash = computeFileHash(sourceContent)
-      const contentHash = crypto.createHash('sha256').update(sourceHash).digest('hex')
+      const contentHash = computeContentHashWithCommand(sourceHash, 'echo "building"')
 
       // Create cache structure with nested empty directories
       const hashDir = ospath.join(playbookDir, '.cache/antora/collector-cache/hashes/test-component/build')
@@ -1333,7 +1409,7 @@ describe('collector-cache-extension', () => {
 
       // Pre-create cache with old content
       const sourceHash = computeFileHash(sourceContent)
-      const contentHash = crypto.createHash('sha256').update(sourceHash).digest('hex')
+      const contentHash = computeContentHashWithCommand(sourceHash, 'echo "building"')
       const existingCacheDir = ospath.join(
         playbookDir,
         '.cache/antora/collector-cache/outputs',
@@ -1505,7 +1581,7 @@ describe('collector-cache-extension', () => {
       createSourceFile(worktreeDir, 'src/main.c', sourceContent)
 
       const sourceHash = computeFileHash(sourceContent)
-      const contentHash = crypto.createHash('sha256').update(sourceHash).digest('hex')
+      const contentHash = computeContentHashWithCommand(sourceHash, 'echo "building"')
 
       const hashDir = ospath.join(playbookDir, '.cache/antora/collector-cache/hashes/test-component/build')
       const outputDir = ospath.join(playbookDir, '.cache/antora/collector-cache/outputs', contentHash, 'build/output')
@@ -3452,7 +3528,7 @@ describe('collector-cache-extension', () => {
 
       // Compute expected hash
       const sourceHash = computeFileHash(sourceContent)
-      const contentHash = crypto.createHash('sha256').update(sourceHash).digest('hex')
+      const contentHash = computeContentHashWithCommand(sourceHash, 'echo "building"')
 
       // Create cache structure
       const hashDir = ospath.join(playbookDir, '.cache/antora/collector-cache/hashes/test-component/build')
