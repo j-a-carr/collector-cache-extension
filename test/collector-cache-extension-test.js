@@ -149,6 +149,12 @@ describe('collector-cache-extension', () => {
       expect(generatorContext.contentAggregated).to.be.instanceOf(Function)
       expect(generatorContext.beforePublish).to.be.instanceOf(Function)
     })
+
+    it('should be able to call register with no arguments', () => {
+      ext.register.call(generatorContext)
+      expect(generatorContext.contentAggregated).to.be.instanceOf(Function)
+      expect(generatorContext.beforePublish).to.be.instanceOf(Function)
+    })
   })
 
   describe('contentAggregated', () => {
@@ -3709,6 +3715,174 @@ describe('collector-cache-extension', () => {
       // If scan.dir contains '.cache', the bug is present - collector will scan from cache
       const scanDir = Array.isArray(scanConfig) ? scanConfig[0].dir : scanConfig.dir
       expect(scanDir).to.not.include('.cache', 'Scan should point to worktree, not cache directory')
+    })
+  })
+
+  describe('hash_transforms configuration', () => {
+    let playbook, contentAggregate, worktree, cacheDir, buildOutputDir
+
+    beforeEach(() => {
+      worktree = tempDir('collector-cache-transforms-')
+      cacheDir = tempDir('cache-transforms-')
+
+      // Create pom.xml files with different versions
+      createSourceFile(worktree, 'pom.xml', '<project><version>1.0.0</version></project>')
+      createSourceFile(worktree, 'src/main.java', 'public class Main {}')
+
+      buildOutputDir = ospath.join(worktree, 'build/output')
+      fs.mkdirSync(buildOutputDir, { recursive: true })
+      fs.writeFileSync(ospath.join(buildOutputDir, 'result.txt'), 'build output', 'utf8')
+
+      playbook = {
+        dir: cacheDir,
+        runtime: { cacheDir: '.cache/antora' },
+      }
+
+      contentAggregate = [
+        {
+          name: 'test-component',
+          origins: [
+            {
+              worktree,
+              gitdir: worktree + '/.git', // Local development
+              url: 'https://example.com/repo.git',
+              descriptor: {
+                ext: {
+                  collectorCache: [
+                    {
+                      run: {
+                        key: 'build',
+                        sources: ['pom.xml', 'src/main.java'],
+                        command: 'echo "build"',
+                        cacheDir: 'build/output',
+                      },
+                    },
+                  ],
+                },
+              },
+            },
+          ],
+        },
+      ]
+    })
+
+    afterEach(async () => {
+      await cleanDir(worktree)
+      await cleanDir(cacheDir)
+    })
+
+    it('should compile hash transforms from extension config', async () => {
+      const generatorContext = createGeneratorContext()
+      const config = {
+        hash_transforms: [
+          { pattern: '**/pom.xml', replace: [{ regex: '<version>[^<]+</version>', with: '<version>NORMALIZED</version>' }] },
+        ],
+      }
+
+      ext.register.call(generatorContext, { config })
+      await generatorContext.contentAggregated({ playbook, contentAggregate })
+
+      const infoMessages = generatorContext.messages.filter((m) => m.level === 'info')
+      expect(infoMessages.some((m) => m.msg.includes('Compiled 1 hash transform pattern'))).to.be.true()
+    })
+
+    it('should handle hashtransforms (lowercase) from Antora normalization', async () => {
+      const generatorContext = createGeneratorContext()
+      const config = {
+        hashtransforms: [
+          { pattern: '**/pom.xml', replace: [{ regex: '<version>[^<]+</version>', with: '<version>NORMALIZED</version>' }] },
+        ],
+      }
+
+      ext.register.call(generatorContext, { config })
+      await generatorContext.contentAggregated({ playbook, contentAggregate })
+
+      const infoMessages = generatorContext.messages.filter((m) => m.level === 'info')
+      expect(infoMessages.some((m) => m.msg.includes('Compiled 1 hash transform pattern'))).to.be.true()
+    })
+
+    it('should cache HIT when transforms normalize different content to same hash', async () => {
+      const config = {
+        hash_transforms: [
+          { pattern: '**/pom.xml', replace: [{ regex: '<version>[^<]+</version>', with: '<version>NORMALIZED</version>' }] },
+        ],
+      }
+
+      // First run with version 1.0.0
+      const generatorContext1 = createGeneratorContext()
+
+      ext.register.call(generatorContext1, { config })
+      await generatorContext1.contentAggregated({ playbook, contentAggregate })
+      await generatorContext1.beforePublish({ playbook })
+
+      const run1Messages = generatorContext1.messages.filter((m) => m.level === 'info')
+      expect(run1Messages.some((m) => m.msg.includes('Cache MISS'))).to.be.true('Run 1 should be cache MISS')
+      expect(run1Messages.some((m) => m.msg.includes('Cached outputs'))).to.be.true('Run 1 should cache outputs')
+
+      // Change pom.xml version (but transform normalizes it)
+      createSourceFile(worktree, 'pom.xml', '<project><version>2.0.0</version></project>')
+
+      // Delete build output to verify it gets restored from cache
+      fs.rmSync(buildOutputDir, { recursive: true, force: true })
+
+      // Second run with version 2.0.0 - should be HIT because transforms normalize the version
+      const contentAggregate2 = JSON.parse(JSON.stringify(contentAggregate))
+      contentAggregate2[0].origins[0].descriptor.ext.collector = []
+
+      const generatorContext2 = createGeneratorContext()
+
+      ext.register.call(generatorContext2, { config })
+      await generatorContext2.contentAggregated({ playbook, contentAggregate: contentAggregate2 })
+
+      const run2Messages = generatorContext2.messages.filter((m) => m.level === 'info')
+      expect(run2Messages.some((m) => m.msg.includes('Cache HIT'))).to.be.true('Run 2 should be cache HIT')
+    })
+
+    it('should cache MISS when non-normalized content changes', async () => {
+      const config = {
+        hash_transforms: [
+          { pattern: '**/pom.xml', replace: [{ regex: '<version>[^<]+</version>', with: '<version>NORMALIZED</version>' }] },
+        ],
+      }
+
+      // First run
+      const generatorContext1 = createGeneratorContext()
+
+      ext.register.call(generatorContext1, { config })
+      await generatorContext1.contentAggregated({ playbook, contentAggregate })
+      await generatorContext1.beforePublish({ playbook })
+
+      // Change source code (not pom.xml) - should cause cache MISS
+      createSourceFile(worktree, 'src/main.java', 'public class Main { // changed }')
+
+      // Delete build output
+      fs.rmSync(buildOutputDir, { recursive: true, force: true })
+      fs.mkdirSync(buildOutputDir, { recursive: true })
+      fs.writeFileSync(ospath.join(buildOutputDir, 'result.txt'), 'new build output', 'utf8')
+
+      // Second run - should be MISS because source code changed
+      const contentAggregate2 = JSON.parse(JSON.stringify(contentAggregate))
+      contentAggregate2[0].origins[0].descriptor.ext.collector = []
+
+      const generatorContext2 = createGeneratorContext()
+
+      ext.register.call(generatorContext2, { config })
+      await generatorContext2.contentAggregated({ playbook, contentAggregate: contentAggregate2 })
+
+      const run2Messages = generatorContext2.messages.filter((m) => m.level === 'info')
+      expect(run2Messages.some((m) => m.msg.includes('Cache MISS'))).to.be.true('Run 2 should be cache MISS')
+    })
+
+    it('should work without hash_transforms config', async () => {
+      const generatorContext = createGeneratorContext()
+      // No config property set
+
+      ext.register.call(generatorContext, { playbook })
+      await generatorContext.contentAggregated({ playbook, contentAggregate })
+
+      const infoMessages = generatorContext.messages.filter((m) => m.level === 'info')
+      expect(infoMessages.some((m) => m.msg.includes('Compiled'))).to.be.false('Should not log compiled transforms')
+      expect(infoMessages.some((m) => m.msg.includes('Processing collector-cache'))).to.be.true()
     })
   })
 })

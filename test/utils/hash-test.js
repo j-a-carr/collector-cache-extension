@@ -7,6 +7,7 @@ const os = require('os')
 const ospath = require('node:path')
 const proxyquire = require('proxyquire')
 const { computeHashes, computeContentHash, computeHash, computeOutputHash } = require('../../lib/utils/hash')
+const { compileTransforms } = require('../../lib/utils/transform')
 
 describe('utils/hash', () => {
   let workDir
@@ -68,6 +69,47 @@ describe('utils/hash', () => {
       expect(hashes).to.be.an('object')
       expect(messages.some((m) => m.includes('Found: test.txt'))).to.be.true()
       expect(messages.some((m) => m.includes('...'))).to.be.true()
+    })
+
+    it('should apply transforms before hashing', () => {
+      const transforms = compileTransforms([
+        { pattern: '**/*.xml', replace: [{ regex: '<version>[^<]+</version>', with: '<version>NORMALIZED</version>' }] },
+      ])
+      fs.writeFileSync(ospath.join(workDir, 'pom.xml'), '<version>1.0.0</version>', 'utf8')
+      fs.writeFileSync(ospath.join(workDir, 'pom2.xml'), '<version>2.0.0</version>', 'utf8')
+
+      const hashes = computeHashes(workDir, ['pom.xml', 'pom2.xml'], null, null, null, transforms)
+
+      // Both files should have the same hash since transforms normalize the version
+      expect(hashes['pom.xml']).to.equal(hashes['pom2.xml'])
+    })
+
+    it('should produce different hash without transforms', () => {
+      fs.writeFileSync(ospath.join(workDir, 'pom.xml'), '<version>1.0.0</version>', 'utf8')
+      fs.writeFileSync(ospath.join(workDir, 'pom2.xml'), '<version>2.0.0</version>', 'utf8')
+
+      const hashes = computeHashes(workDir, ['pom.xml', 'pom2.xml'])
+
+      // Without transforms, the hashes should differ
+      expect(hashes['pom.xml']).to.not.equal(hashes['pom2.xml'])
+    })
+
+    it('should work without transforms parameter', () => {
+      fs.writeFileSync(ospath.join(workDir, 'test.txt'), 'content', 'utf8')
+      const hashes = computeHashes(workDir, ['test.txt'])
+      expect(hashes['test.txt']).to.have.lengthOf(64)
+    })
+
+    it('should work with null transforms parameter', () => {
+      fs.writeFileSync(ospath.join(workDir, 'test.txt'), 'content', 'utf8')
+      const hashes = computeHashes(workDir, ['test.txt'], null, null, null, null)
+      expect(hashes['test.txt']).to.have.lengthOf(64)
+    })
+
+    it('should work with empty transforms array', () => {
+      fs.writeFileSync(ospath.join(workDir, 'test.txt'), 'content', 'utf8')
+      const hashes = computeHashes(workDir, ['test.txt'], null, null, null, [])
+      expect(hashes['test.txt']).to.have.lengthOf(64)
     })
   })
 
