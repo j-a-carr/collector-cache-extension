@@ -96,6 +96,24 @@ describe('collector-cache-extension', () => {
     }
     return crypto.createHash('sha256').update(combined).digest('hex')
   }
+  // Compute output hash from a directory (mirrors lib/utils/hash.js computeOutputHash)
+  const computeOutputHashForDir = (outputDir) => {
+    const entries = fs.readdirSync(outputDir, { withFileTypes: true, recursive: true })
+    const fileEntries = entries.filter((e) => e.isFile())
+    const relativePaths = fileEntries
+      .map((e) => {
+        const parentPath = e.parentPath || e.path || outputDir
+        return ospath.relative(outputDir, ospath.join(parentPath, e.name))
+      })
+      .sort()
+    const files = {}
+    for (const relPath of relativePaths) {
+      const content = fs.readFileSync(ospath.join(outputDir, relPath))
+      files[relPath] = crypto.createHash('sha256').update(content).digest('hex')
+    }
+    const combined = relativePaths.map((p) => files[p]).join('')
+    return crypto.createHash('sha256').update(combined).digest('hex')
+  }
 
   let generatorContext
   let workDir
@@ -731,7 +749,10 @@ describe('collector-cache-extension', () => {
       expect(fs.existsSync(pointerPath)).to.be.true('pointer file should exist')
 
       const pointer = JSON.parse(fs.readFileSync(pointerPath, 'utf8'))
-      expect(pointer.outputDir).to.equal(contentHash)
+      // v2 format: outputDir is hash of output files, not source files
+      expect(pointer.version).to.equal(2)
+      const expectedOutputHash = computeOutputHashForDir(buildOutputDir)
+      expect(pointer.outputDir).to.equal(expectedOutputHash)
       expect(pointer.scanDir).to.equal('build/output')
       expect(pointer.sources).to.have.property('src/main.c', sourceHash)
       expect(pointer.command).to.equal('echo "building"')
@@ -1412,24 +1433,25 @@ describe('collector-cache-extension', () => {
       expect(fs.existsSync(ospath.join(cachedDir, 'js/app.js'))).to.be.true()
     })
 
-    it('should overwrite existing cache directory', async () => {
+    it('should deduplicate when output hash already exists in cache', async () => {
       const sourceContent = 'int main() { return 0; }'
       createSourceFile(worktreeDir, 'src/main.c', sourceContent)
 
       // Create output
       const buildOutputDir = ospath.join(worktreeDir, 'build/output')
-      createSourceFile(buildOutputDir, 'new.txt', 'new content')
+      createSourceFile(buildOutputDir, 'result.txt', 'build output')
 
-      // Pre-create cache with old content
-      const sourceHash = computeFileHash(sourceContent)
-      const contentHash = computeContentHashWithCommand(sourceHash, 'echo "building"')
+      // Pre-create cache with identical content at the output hash path
+      // Simulates a previous build with different sources that produced same output
+      const outputHash = computeOutputHashForDir(buildOutputDir)
       const existingCacheDir = ospath.join(
         playbookDir,
         '.cache/antora/collector-cache/outputs',
-        contentHash,
+        outputHash,
         'build/output'
       )
-      createSourceFile(existingCacheDir, 'old.txt', 'old content')
+      // Create identical file - this simulates deduplication scenario
+      createSourceFile(existingCacheDir, 'result.txt', 'build output')
 
       const contentAggregate = [
         {
@@ -1461,9 +1483,10 @@ describe('collector-cache-extension', () => {
       await generatorContext.contentAggregated({ playbook, contentAggregate })
       await generatorContext.beforePublish({ playbook })
 
-      // Old file should be gone, new file should exist
-      expect(fs.existsSync(ospath.join(existingCacheDir, 'old.txt'))).to.be.false()
-      expect(fs.existsSync(ospath.join(existingCacheDir, 'new.txt'))).to.be.true()
+      // Should log deduplication message instead of "Cached outputs"
+      const infoMessages = generatorContext.messages.filter((m) => m.level === 'info')
+      expect(infoMessages.some((m) => m.msg.includes('Deduplicated'))).to.be.true()
+      expect(infoMessages.some((m) => m.msg.includes('already cached'))).to.be.true()
     })
   })
 
