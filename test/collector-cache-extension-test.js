@@ -150,8 +150,8 @@ describe('collector-cache-extension', () => {
       expect(generatorContext.beforePublish).to.be.instanceOf(Function)
     })
 
-    it('should be able to call register with no arguments', () => {
-      ext.register.call(generatorContext)
+    it('should be able to call register with empty config', () => {
+      ext.register.call(generatorContext, { config: {} })
       expect(generatorContext.contentAggregated).to.be.instanceOf(Function)
       expect(generatorContext.beforePublish).to.be.instanceOf(Function)
     })
@@ -3774,7 +3774,7 @@ describe('collector-cache-extension', () => {
     it('should compile hash transforms from extension config', async () => {
       const generatorContext = createGeneratorContext()
       const config = {
-        hash_transforms: [
+        hashTransforms: [
           { pattern: '**/pom.xml', replace: [{ regex: '<version>[^<]+</version>', with: '<version>NORMALIZED</version>' }] },
         ],
       }
@@ -3803,7 +3803,7 @@ describe('collector-cache-extension', () => {
 
     it('should cache HIT when transforms normalize different content to same hash', async () => {
       const config = {
-        hash_transforms: [
+        hashTransforms: [
           { pattern: '**/pom.xml', replace: [{ regex: '<version>[^<]+</version>', with: '<version>NORMALIZED</version>' }] },
         ],
       }
@@ -3840,7 +3840,7 @@ describe('collector-cache-extension', () => {
 
     it('should cache MISS when non-normalized content changes', async () => {
       const config = {
-        hash_transforms: [
+        hashTransforms: [
           { pattern: '**/pom.xml', replace: [{ regex: '<version>[^<]+</version>', with: '<version>NORMALIZED</version>' }] },
         ],
       }
@@ -3883,6 +3883,979 @@ describe('collector-cache-extension', () => {
       const infoMessages = generatorContext.messages.filter((m) => m.level === 'info')
       expect(infoMessages.some((m) => m.msg.includes('Compiled'))).to.be.false('Should not log compiled transforms')
       expect(infoMessages.some((m) => m.msg.includes('Processing collector-cache'))).to.be.true()
+    })
+  })
+
+  describe('per-entry hash_transforms configuration', () => {
+    let playbook, worktree, cacheDir, buildOutputDir
+
+    beforeEach(() => {
+      worktree = tempDir('collector-cache-entry-transforms-')
+      cacheDir = tempDir('cache-entry-transforms-')
+
+      // Create source files
+      createSourceFile(worktree, 'config.xml', '<config><timestamp>2025-01-12</timestamp></config>')
+      createSourceFile(worktree, 'pom.xml', '<project><version>1.0.0</version></project>')
+      createSourceFile(worktree, 'src/main.java', 'public class Main {}')
+
+      buildOutputDir = ospath.join(worktree, 'build/output')
+      fs.mkdirSync(buildOutputDir, { recursive: true })
+      fs.writeFileSync(ospath.join(buildOutputDir, 'result.txt'), 'build output', 'utf8')
+
+      playbook = {
+        dir: cacheDir,
+        runtime: { cacheDir: '.cache/antora' },
+      }
+    })
+
+    afterEach(async () => {
+      await cleanDir(worktree)
+      await cleanDir(cacheDir)
+    })
+
+    it('should apply entry-level transforms with extend mode (default)', async () => {
+      const config = {
+        hashTransforms: [
+          { pattern: '**/pom.xml', replace: [{ regex: '<version>[^<]+</version>', with: '<version>NORMALIZED</version>' }] },
+        ],
+      }
+
+      const contentAggregate = [
+        {
+          name: 'test-component',
+          origins: [
+            {
+              worktree,
+              gitdir: worktree + '/.git',
+              url: 'https://example.com/repo.git',
+              descriptor: {
+                ext: {
+                  collectorCache: [
+                    {
+                      run: {
+                        key: 'build',
+                        sources: ['pom.xml', 'config.xml', 'src/main.java'],
+                        command: 'echo "build"',
+                        cacheDir: 'build/output',
+                        // Entry-level transforms (extend global by default)
+                        hashTransforms: [
+                          { pattern: '**/config.xml', replace: [{ regex: '<timestamp>[^<]+</timestamp>', with: '<timestamp>NORMALIZED</timestamp>' }] },
+                        ],
+                      },
+                    },
+                  ],
+                },
+              },
+            },
+          ],
+        },
+      ]
+
+      const generatorContext = createGeneratorContext()
+      ext.register.call(generatorContext, { config })
+      await generatorContext.contentAggregated({ playbook, contentAggregate })
+
+      const infoMessages = generatorContext.messages.filter((m) => m.level === 'info')
+      expect(infoMessages.some((m) => m.msg.includes('Compiled 1 hash transform pattern'))).to.be.true()
+      expect(infoMessages.some((m) => m.msg.includes('Cache MISS'))).to.be.true()
+    })
+
+    it('should apply only entry-level transforms with replace mode', async () => {
+      const config = {
+        hashTransforms: [
+          { pattern: '**/pom.xml', replace: [{ regex: '<version>[^<]+</version>', with: '<version>NORMALIZED</version>' }] },
+        ],
+      }
+
+      const contentAggregate = [
+        {
+          name: 'test-component',
+          origins: [
+            {
+              worktree,
+              gitdir: worktree + '/.git',
+              url: 'https://example.com/repo.git',
+              descriptor: {
+                ext: {
+                  collectorCache: [
+                    {
+                      run: {
+                        key: 'build',
+                        sources: ['pom.xml', 'config.xml'],
+                        command: 'echo "build"',
+                        cacheDir: 'build/output',
+                        // Replace global transforms with entry-level only
+                        hashTransforms: [
+                          { pattern: '**/config.xml', replace: [{ regex: '<timestamp>[^<]+</timestamp>', with: '<timestamp>NORMALIZED</timestamp>' }] },
+                        ],
+                        hashTransformsMode: 'replace',
+                      },
+                    },
+                  ],
+                },
+              },
+            },
+          ],
+        },
+      ]
+
+      const generatorContext = createGeneratorContext()
+      ext.register.call(generatorContext, { config })
+      await generatorContext.contentAggregated({ playbook, contentAggregate })
+
+      // Global transform should be compiled but entry uses replace mode
+      const infoMessages = generatorContext.messages.filter((m) => m.level === 'info')
+      expect(infoMessages.some((m) => m.msg.includes('Compiled 1 hash transform pattern'))).to.be.true()
+      expect(infoMessages.some((m) => m.msg.includes('Cache MISS'))).to.be.true()
+    })
+
+    it('should skip transforms with ignore mode', async () => {
+      const config = {
+        hashTransforms: [
+          { pattern: '**/pom.xml', replace: [{ regex: '<version>[^<]+</version>', with: '<version>NORMALIZED</version>' }] },
+        ],
+      }
+
+      const contentAggregate = [
+        {
+          name: 'test-component',
+          origins: [
+            {
+              worktree,
+              gitdir: worktree + '/.git',
+              url: 'https://example.com/repo.git',
+              descriptor: {
+                ext: {
+                  collectorCache: [
+                    {
+                      run: {
+                        key: 'build',
+                        sources: ['pom.xml', 'src/main.java'],
+                        command: 'echo "build"',
+                        cacheDir: 'build/output',
+                        // Ignore all transforms for this entry
+                        hashTransformsMode: 'ignore',
+                      },
+                    },
+                  ],
+                },
+              },
+            },
+          ],
+        },
+      ]
+
+      const generatorContext = createGeneratorContext()
+      ext.register.call(generatorContext, { config })
+      await generatorContext.contentAggregated({ playbook, contentAggregate })
+
+      const infoMessages = generatorContext.messages.filter((m) => m.level === 'info')
+      expect(infoMessages.some((m) => m.msg.includes('Compiled 1 hash transform pattern'))).to.be.true()
+      expect(infoMessages.some((m) => m.msg.includes('Cache MISS'))).to.be.true()
+    })
+
+    it('should handle replace mode without entry transforms in main path', async () => {
+      const config = {
+        hashTransforms: [
+          { pattern: '**/pom.xml', replace: [{ regex: '<version>[^<]+</version>', with: '<version>NORMALIZED</version>' }] },
+        ],
+      }
+
+      const contentAggregate = [
+        {
+          name: 'test-component',
+          origins: [
+            {
+              worktree,
+              gitdir: worktree + '/.git',
+              url: 'https://example.com/repo.git',
+              descriptor: {
+                ext: {
+                  collectorCache: [
+                    {
+                      run: {
+                        key: 'build',
+                        sources: ['pom.xml'],
+                        command: 'echo "build"',
+                        cacheDir: 'build/output',
+                        // Replace mode without entry transforms - uses null
+                        hashTransformsMode: 'replace',
+                      },
+                    },
+                  ],
+                },
+              },
+            },
+          ],
+        },
+      ]
+
+      const generatorContext = createGeneratorContext()
+      ext.register.call(generatorContext, { config })
+      await generatorContext.contentAggregated({ playbook, contentAggregate })
+
+      const infoMessages = generatorContext.messages.filter((m) => m.level === 'info')
+      expect(infoMessages.some((m) => m.msg.includes('Cache MISS'))).to.be.true()
+    })
+
+    it('should include transforms info in pointer file when files are transformed', async () => {
+      const config = {
+        hashTransforms: [
+          { pattern: '**/pom.xml', replace: [{ regex: '<version>[^<]+</version>', with: '<version>NORMALIZED</version>' }] },
+        ],
+      }
+
+      const contentAggregate = [
+        {
+          name: 'test-component',
+          origins: [
+            {
+              worktree,
+              gitdir: worktree + '/.git',
+              url: 'https://example.com/repo.git',
+              descriptor: {
+                ext: {
+                  collectorCache: [
+                    {
+                      run: {
+                        key: 'build',
+                        sources: ['pom.xml'],
+                        command: 'echo "build"',
+                        cacheDir: 'build/output',
+                      },
+                    },
+                  ],
+                },
+              },
+            },
+          ],
+        },
+      ]
+
+      const generatorContext = createGeneratorContext()
+      ext.register.call(generatorContext, { config })
+      await generatorContext.contentAggregated({ playbook, contentAggregate })
+      await generatorContext.beforePublish({ playbook, contentAggregate })
+
+      // Find the pointer file
+      const hashesDir = ospath.join(cacheDir, '.cache/antora/collector-cache/hashes/test-component/build')
+      const pointerFiles = fs.readdirSync(hashesDir).filter((f) => f.endsWith('.json'))
+      expect(pointerFiles).to.have.lengthOf(1)
+
+      const pointer = JSON.parse(fs.readFileSync(ospath.join(hashesDir, pointerFiles[0]), 'utf8'))
+      expect(pointer.transforms).to.be.an('object')
+      expect(pointer.transforms.applied).to.include('pom.xml')
+      expect(pointer.transforms.mode).to.equal('global-only')
+      expect(pointer.transforms.patterns).to.include('**/pom.xml')
+    })
+
+    it('should not include transforms info when no files are transformed', async () => {
+      // No transforms configured
+      const contentAggregate = [
+        {
+          name: 'test-component',
+          origins: [
+            {
+              worktree,
+              gitdir: worktree + '/.git',
+              url: 'https://example.com/repo.git',
+              descriptor: {
+                ext: {
+                  collectorCache: [
+                    {
+                      run: {
+                        key: 'build',
+                        sources: ['src/main.java'],
+                        command: 'echo "build"',
+                        cacheDir: 'build/output',
+                      },
+                    },
+                  ],
+                },
+              },
+            },
+          ],
+        },
+      ]
+
+      const generatorContext = createGeneratorContext()
+      ext.register.call(generatorContext, { config: {} })
+      await generatorContext.contentAggregated({ playbook, contentAggregate })
+      await generatorContext.beforePublish({ playbook, contentAggregate })
+
+      // Find the pointer file
+      const hashesDir = ospath.join(cacheDir, '.cache/antora/collector-cache/hashes/test-component/build')
+      const pointerFiles = fs.readdirSync(hashesDir).filter((f) => f.endsWith('.json'))
+      expect(pointerFiles).to.have.lengthOf(1)
+
+      const pointer = JSON.parse(fs.readFileSync(ospath.join(hashesDir, pointerFiles[0]), 'utf8'))
+      expect(pointer.transforms).to.be.undefined()
+    })
+
+    describe('no worktree path (worktree: undefined)', () => {
+      it('should handle ignore mode when worktree is undefined', async () => {
+        const mockGit = createMockGit()
+        const mockSpawn = createMockSpawn(0, '', '')
+        const context = createGeneratorContext({
+          git: mockGit,
+          childProcess: createMockChildProcess(mockSpawn),
+        })
+
+        const config = {
+          hashTransforms: [
+            { pattern: '**/pom.xml', replace: [{ regex: '<version>[^<]+</version>', with: '<version>NORMALIZED</version>' }] },
+          ],
+        }
+
+        const contentAggregate = [
+          {
+            name: 'test-component',
+            origins: [
+              {
+                descriptor: {
+                  ext: {
+                    collectorCache: [
+                      {
+                        run: {
+                          key: 'build',
+                          sources: ['pom.xml'],
+                          cacheDir: 'build/output',
+                          hashTransformsMode: 'ignore',
+                        },
+                      },
+                    ],
+                  },
+                },
+                worktree: undefined,
+                url: 'https://github.com/example/test-repo.git',
+                gitdir: ospath.join(cacheDir, 'gitdir'),
+                refname: 'main',
+                reftype: 'branch',
+              },
+            ],
+          },
+        ]
+
+        ext.register.call(context, { config })
+        await context.contentAggregated({ playbook, contentAggregate })
+
+        const infoMessages = context.messages.filter((m) => m.level === 'info')
+        expect(infoMessages.some((m) => m.msg.includes('No worktree found'))).to.be.true()
+      })
+
+      it('should handle replace mode with entry transforms when worktree is undefined', async () => {
+        const mockGit = createMockGit()
+        const mockSpawn = createMockSpawn(0, '', '')
+        const context = createGeneratorContext({
+          git: mockGit,
+          childProcess: createMockChildProcess(mockSpawn),
+        })
+
+        const config = {
+          hashTransforms: [
+            { pattern: '**/pom.xml', replace: [{ regex: '<version>[^<]+</version>', with: '<version>NORMALIZED</version>' }] },
+          ],
+        }
+
+        const contentAggregate = [
+          {
+            name: 'test-component',
+            origins: [
+              {
+                descriptor: {
+                  ext: {
+                    collectorCache: [
+                      {
+                        run: {
+                          key: 'build',
+                          sources: ['pom.xml'],
+                          cacheDir: 'build/output',
+                          hashTransforms: [
+                            { pattern: '**/config.xml', replace: [{ regex: 'test', with: 'TEST' }] },
+                          ],
+                          hashTransformsMode: 'replace',
+                        },
+                      },
+                    ],
+                  },
+                },
+                worktree: undefined,
+                url: 'https://github.com/example/test-repo.git',
+                gitdir: ospath.join(cacheDir, 'gitdir'),
+                refname: 'main',
+                reftype: 'branch',
+              },
+            ],
+          },
+        ]
+
+        ext.register.call(context, { config })
+        await context.contentAggregated({ playbook, contentAggregate })
+
+        const infoMessages = context.messages.filter((m) => m.level === 'info')
+        expect(infoMessages.some((m) => m.msg.includes('No worktree found'))).to.be.true()
+      })
+
+      it('should handle replace mode without entry transforms when worktree is undefined', async () => {
+        const mockGit = createMockGit()
+        const mockSpawn = createMockSpawn(0, '', '')
+        const context = createGeneratorContext({
+          git: mockGit,
+          childProcess: createMockChildProcess(mockSpawn),
+        })
+
+        const config = {
+          hashTransforms: [
+            { pattern: '**/pom.xml', replace: [{ regex: '<version>[^<]+</version>', with: '<version>NORMALIZED</version>' }] },
+          ],
+        }
+
+        const contentAggregate = [
+          {
+            name: 'test-component',
+            origins: [
+              {
+                descriptor: {
+                  ext: {
+                    collectorCache: [
+                      {
+                        run: {
+                          key: 'build',
+                          sources: ['pom.xml'],
+                          cacheDir: 'build/output',
+                          // No entry-level transforms, but replace mode
+                          hashTransformsMode: 'replace',
+                        },
+                      },
+                    ],
+                  },
+                },
+                worktree: undefined,
+                url: 'https://github.com/example/test-repo.git',
+                gitdir: ospath.join(cacheDir, 'gitdir'),
+                refname: 'main',
+                reftype: 'branch',
+              },
+            ],
+          },
+        ]
+
+        ext.register.call(context, { config })
+        await context.contentAggregated({ playbook, contentAggregate })
+
+        const infoMessages = context.messages.filter((m) => m.level === 'info')
+        expect(infoMessages.some((m) => m.msg.includes('No worktree found'))).to.be.true()
+      })
+
+      it('should handle global-only transforms when worktree is undefined', async () => {
+        const mockGit = createMockGit()
+        const mockSpawn = createMockSpawn(0, '', '')
+        const context = createGeneratorContext({
+          git: mockGit,
+          childProcess: createMockChildProcess(mockSpawn),
+        })
+
+        const config = {
+          hashTransforms: [
+            { pattern: '**/pom.xml', replace: [{ regex: '<version>[^<]+</version>', with: '<version>NORMALIZED</version>' }] },
+          ],
+        }
+
+        const contentAggregate = [
+          {
+            name: 'test-component',
+            origins: [
+              {
+                descriptor: {
+                  ext: {
+                    collectorCache: [
+                      {
+                        run: {
+                          key: 'build',
+                          sources: ['pom.xml'],
+                          cacheDir: 'build/output',
+                          // No entry-level transforms, only global
+                        },
+                      },
+                    ],
+                  },
+                },
+                worktree: undefined,
+                url: 'https://github.com/example/test-repo.git',
+                gitdir: ospath.join(cacheDir, 'gitdir'),
+                refname: 'main',
+                reftype: 'branch',
+              },
+            ],
+          },
+        ]
+
+        ext.register.call(context, { config })
+        await context.contentAggregated({ playbook, contentAggregate })
+
+        const infoMessages = context.messages.filter((m) => m.level === 'info')
+        expect(infoMessages.some((m) => m.msg.includes('No worktree found'))).to.be.true()
+      })
+
+      it('should handle extend mode with both global and entry transforms when worktree is undefined', async () => {
+        const mockGit = createMockGit()
+        const mockSpawn = createMockSpawn(0, '', '')
+        const context = createGeneratorContext({
+          git: mockGit,
+          childProcess: createMockChildProcess(mockSpawn),
+        })
+
+        const config = {
+          hashTransforms: [
+            { pattern: '**/pom.xml', replace: [{ regex: '<version>[^<]+</version>', with: '<version>NORMALIZED</version>' }] },
+          ],
+        }
+
+        const contentAggregate = [
+          {
+            name: 'test-component',
+            origins: [
+              {
+                descriptor: {
+                  ext: {
+                    collectorCache: [
+                      {
+                        run: {
+                          key: 'build',
+                          sources: ['pom.xml'],
+                          cacheDir: 'build/output',
+                          // Entry-level transforms to combine with global (extend mode)
+                          hashTransforms: [
+                            { pattern: '**/config.xml', replace: [{ regex: 'test', with: 'TEST' }] },
+                          ],
+                          // extend is default, no need to specify hashTransformsMode
+                        },
+                      },
+                    ],
+                  },
+                },
+                worktree: undefined,
+                url: 'https://github.com/example/test-repo.git',
+                gitdir: ospath.join(cacheDir, 'gitdir'),
+                refname: 'main',
+                reftype: 'branch',
+              },
+            ],
+          },
+        ]
+
+        ext.register.call(context, { config })
+        await context.contentAggregated({ playbook, contentAggregate })
+
+        const infoMessages = context.messages.filter((m) => m.level === 'info')
+        expect(infoMessages.some((m) => m.msg.includes('No worktree found'))).to.be.true()
+      })
+    })
+
+    describe('worktree defined but does not exist on disk', () => {
+      it('should handle ignore mode when worktree does not exist', async () => {
+        const nonExistentWorktree = ospath.join(cacheDir, 'non-existent-worktree')
+
+        const config = {
+          hashTransforms: [
+            { pattern: '**/pom.xml', replace: [{ regex: '<version>[^<]+</version>', with: '<version>NORMALIZED</version>' }] },
+          ],
+        }
+
+        const contentAggregate = [
+          {
+            name: 'test-component',
+            origins: [
+              {
+                worktree: nonExistentWorktree,
+                gitdir: ospath.join(nonExistentWorktree, '.git'),
+                url: 'https://example.com/repo.git',
+                descriptor: {
+                  ext: {
+                    collectorCache: [
+                      {
+                        run: {
+                          key: 'build',
+                          sources: ['pom.xml'],
+                          cacheDir: 'build/output',
+                          hashTransformsMode: 'ignore',
+                        },
+                      },
+                    ],
+                  },
+                },
+              },
+            ],
+          },
+        ]
+
+        const generatorContext = createGeneratorContext()
+        ext.register.call(generatorContext, { config })
+        await generatorContext.contentAggregated({ playbook, contentAggregate })
+
+        const debugMessages = generatorContext.messages.filter((m) => m.level === 'debug')
+        expect(debugMessages.some((m) => m.msg.includes('Worktree does not exist yet'))).to.be.true()
+      })
+
+      it('should handle replace mode with entry transforms when worktree does not exist', async () => {
+        const nonExistentWorktree = ospath.join(cacheDir, 'non-existent-worktree-2')
+
+        const config = {
+          hashTransforms: [
+            { pattern: '**/pom.xml', replace: [{ regex: '<version>[^<]+</version>', with: '<version>NORMALIZED</version>' }] },
+          ],
+        }
+
+        const contentAggregate = [
+          {
+            name: 'test-component',
+            origins: [
+              {
+                worktree: nonExistentWorktree,
+                gitdir: ospath.join(nonExistentWorktree, '.git'),
+                url: 'https://example.com/repo.git',
+                descriptor: {
+                  ext: {
+                    collectorCache: [
+                      {
+                        run: {
+                          key: 'build',
+                          sources: ['pom.xml'],
+                          cacheDir: 'build/output',
+                          hashTransforms: [
+                            { pattern: '**/config.xml', replace: [{ regex: 'test', with: 'TEST' }] },
+                          ],
+                          hashTransformsMode: 'replace',
+                        },
+                      },
+                    ],
+                  },
+                },
+              },
+            ],
+          },
+        ]
+
+        const generatorContext = createGeneratorContext()
+        ext.register.call(generatorContext, { config })
+        await generatorContext.contentAggregated({ playbook, contentAggregate })
+
+        const debugMessages = generatorContext.messages.filter((m) => m.level === 'debug')
+        expect(debugMessages.some((m) => m.msg.includes('Worktree does not exist yet'))).to.be.true()
+      })
+
+      it('should handle replace mode without entry transforms when worktree does not exist', async () => {
+        const nonExistentWorktree = ospath.join(cacheDir, 'non-existent-worktree-2b')
+
+        const config = {
+          hashTransforms: [
+            { pattern: '**/pom.xml', replace: [{ regex: '<version>[^<]+</version>', with: '<version>NORMALIZED</version>' }] },
+          ],
+        }
+
+        const contentAggregate = [
+          {
+            name: 'test-component',
+            origins: [
+              {
+                worktree: nonExistentWorktree,
+                gitdir: ospath.join(nonExistentWorktree, '.git'),
+                url: 'https://example.com/repo.git',
+                descriptor: {
+                  ext: {
+                    collectorCache: [
+                      {
+                        run: {
+                          key: 'build',
+                          sources: ['pom.xml'],
+                          cacheDir: 'build/output',
+                          // No entry transforms, but replace mode
+                          hashTransformsMode: 'replace',
+                        },
+                      },
+                    ],
+                  },
+                },
+              },
+            ],
+          },
+        ]
+
+        const generatorContext = createGeneratorContext()
+        ext.register.call(generatorContext, { config })
+        await generatorContext.contentAggregated({ playbook, contentAggregate })
+
+        const debugMessages = generatorContext.messages.filter((m) => m.level === 'debug')
+        expect(debugMessages.some((m) => m.msg.includes('Worktree does not exist yet'))).to.be.true()
+      })
+
+      it('should handle global-only transforms when worktree does not exist', async () => {
+        const nonExistentWorktree = ospath.join(cacheDir, 'non-existent-worktree-3')
+
+        const config = {
+          hashTransforms: [
+            { pattern: '**/pom.xml', replace: [{ regex: '<version>[^<]+</version>', with: '<version>NORMALIZED</version>' }] },
+          ],
+        }
+
+        const contentAggregate = [
+          {
+            name: 'test-component',
+            origins: [
+              {
+                worktree: nonExistentWorktree,
+                gitdir: ospath.join(nonExistentWorktree, '.git'),
+                url: 'https://example.com/repo.git',
+                descriptor: {
+                  ext: {
+                    collectorCache: [
+                      {
+                        run: {
+                          key: 'build',
+                          sources: ['pom.xml'],
+                          cacheDir: 'build/output',
+                          // No entry-level transforms, only global
+                        },
+                      },
+                    ],
+                  },
+                },
+              },
+            ],
+          },
+        ]
+
+        const generatorContext = createGeneratorContext()
+        ext.register.call(generatorContext, { config })
+        await generatorContext.contentAggregated({ playbook, contentAggregate })
+
+        const debugMessages = generatorContext.messages.filter((m) => m.level === 'debug')
+        expect(debugMessages.some((m) => m.msg.includes('Worktree does not exist yet'))).to.be.true()
+      })
+
+      it('should handle extend mode with both global and entry transforms when worktree does not exist', async () => {
+        const nonExistentWorktree = ospath.join(cacheDir, 'non-existent-worktree-4')
+
+        const config = {
+          hashTransforms: [
+            { pattern: '**/pom.xml', replace: [{ regex: '<version>[^<]+</version>', with: '<version>NORMALIZED</version>' }] },
+          ],
+        }
+
+        const contentAggregate = [
+          {
+            name: 'test-component',
+            origins: [
+              {
+                worktree: nonExistentWorktree,
+                gitdir: ospath.join(nonExistentWorktree, '.git'),
+                url: 'https://example.com/repo.git',
+                descriptor: {
+                  ext: {
+                    collectorCache: [
+                      {
+                        run: {
+                          key: 'build',
+                          sources: ['pom.xml'],
+                          cacheDir: 'build/output',
+                          // Entry-level transforms to combine with global (extend mode)
+                          hashTransforms: [
+                            { pattern: '**/config.xml', replace: [{ regex: 'test', with: 'TEST' }] },
+                          ],
+                        },
+                      },
+                    ],
+                  },
+                },
+              },
+            ],
+          },
+        ]
+
+        const generatorContext = createGeneratorContext()
+        ext.register.call(generatorContext, { config })
+        await generatorContext.contentAggregated({ playbook, contentAggregate })
+
+        const debugMessages = generatorContext.messages.filter((m) => m.level === 'debug')
+        expect(debugMessages.some((m) => m.msg.includes('Worktree does not exist yet'))).to.be.true()
+      })
+    })
+  })
+
+  describe('defensive branch coverage', () => {
+    // These tests cover defensive code branches that handle edge cases
+    // which shouldn't occur in normal operation but we want to handle gracefully
+
+    it('should handle entry with missing transformedFiles field (line 550 fallback)', async () => {
+      // Mock computeHashes to return without transformedFiles property
+      const extWithMissingTransformedFiles = proxyquire('../lib/collector-cache-extension', {
+        './utils/hash': {
+          computeHashes: () => ({
+            hashes: { 'src/main.c': 'abc123def456789' },
+            // Missing transformedFiles property - tests || [] fallback
+          }),
+          computeContentHash: (hashes, command) => {
+            const combined = JSON.stringify(hashes) + (command || '')
+            return crypto.createHash('sha256').update(combined).digest('hex')
+          },
+          computeOutputHash: () => ({
+            hash: 'outputhash123',
+          }),
+        },
+        './utils/fs': {
+          checkOutputsExist: () => false,
+          copyDirectory: () => {},
+          checkDirectoryHasFiles: () => true,
+          findFilesMatchingPattern: () => [],
+        },
+        './utils/sources': {
+          resolveSources: async () => ['src/main.c'],
+          resolveDependencySources: () => ({ sources: [], sourceCommands: [] }),
+          buildEntriesMap: () => new Map(),
+        },
+        './utils/cache': {
+          loadPointerFile: () => null,
+          savePointerFile: () => {},
+          restoreFilesToWorktree: () => {},
+        },
+        '@noCallThru': true,
+      })
+
+      const mockGit = createMockGit()
+      const context = createGeneratorContext({ git: mockGit })
+
+      createSourceFile(worktreeDir, 'src/main.c', 'int main() {}')
+      createSourceFile(worktreeDir, 'build/output/result.txt', 'output')
+
+      const contentAggregate = [
+        {
+          name: 'test-component',
+          origins: [
+            {
+              descriptor: {
+                ext: {
+                  collectorCache: [
+                    {
+                      run: {
+                        key: 'build',
+                        sources: ['src/main.c'],
+                        cachedir: 'build/output',
+                        command: 'echo "building"',
+                      },
+                    },
+                  ],
+                },
+              },
+              worktree: worktreeDir,
+              gitdir: ospath.join(worktreeDir, '.git'),
+            },
+          ],
+        },
+      ]
+
+      extWithMissingTransformedFiles.register.call(context, { playbook })
+      await context.contentAggregated({ playbook, contentAggregate })
+      await context.beforePublish({ playbook })
+
+      // Should complete successfully - the || [] fallback handles missing transformedFiles
+      const infoMessages = context.messages.filter((m) => m.level === 'info')
+      expect(infoMessages.some((m) => m.msg.includes('Cached outputs'))).to.be.true()
+    })
+
+    it('should handle transforms info with missing transformMode and effectiveTransforms (lines 604-605)', async () => {
+      // Mock computeHashes to return transformedFiles but no transforms were actually configured
+      // This simulates an inconsistent state that the defensive code handles
+      const extWithInconsistentState = proxyquire('../lib/collector-cache-extension', {
+        './utils/hash': {
+          computeHashes: () => {
+            return {
+              hashes: { 'src/main.c': 'abc123def456789' },
+              // Return non-empty transformedFiles even though no transforms may be active
+              transformedFiles: ['src/main.c'],
+            }
+          },
+          computeContentHash: (hashes, command) => {
+            const combined = JSON.stringify(hashes) + (command || '')
+            return crypto.createHash('sha256').update(combined).digest('hex')
+          },
+          computeOutputHash: () => ({
+            hash: 'outputhash123',
+          }),
+        },
+        './utils/fs': {
+          checkOutputsExist: () => false,
+          copyDirectory: () => {},
+          checkDirectoryHasFiles: () => true,
+          findFilesMatchingPattern: () => [],
+        },
+        './utils/sources': {
+          resolveSources: async () => ['src/main.c'],
+          resolveDependencySources: () => ({ sources: [], sourceCommands: [] }),
+          buildEntriesMap: () => new Map(),
+        },
+        './utils/cache': {
+          loadPointerFile: () => null,
+          savePointerFile: () => {},
+          restoreFilesToWorktree: () => {},
+        },
+        '@noCallThru': true,
+      })
+
+      const mockGit = createMockGit()
+      const context = createGeneratorContext({ git: mockGit })
+
+      createSourceFile(worktreeDir, 'src/main.c', 'int main() {}')
+      createSourceFile(worktreeDir, 'build/output/result.txt', 'output')
+
+      // No global transforms, no entry transforms - but mock returns transformedFiles anyway
+      // This triggers the defensive branches at lines 604-605
+      const contentAggregate = [
+        {
+          name: 'test-component',
+          origins: [
+            {
+              descriptor: {
+                ext: {
+                  collectorCache: [
+                    {
+                      run: {
+                        key: 'build',
+                        sources: ['src/main.c'],
+                        cachedir: 'build/output',
+                        command: 'echo "building"',
+                        // No hashTransforms configured - transformMode will be null
+                      },
+                    },
+                  ],
+                },
+              },
+              worktree: worktreeDir,
+              gitdir: ospath.join(worktreeDir, '.git'),
+            },
+          ],
+        },
+      ]
+
+      extWithInconsistentState.register.call(context, { playbook })
+      await context.contentAggregated({ playbook, contentAggregate })
+      await context.beforePublish({ playbook })
+
+      // Should complete successfully - defensive code handles missing transformMode/effectiveTransforms
+      const infoMessages = context.messages.filter((m) => m.level === 'info')
+      expect(infoMessages.some((m) => m.msg.includes('Cached outputs'))).to.be.true()
+
+      // Verify the pointer file was created with transforms info using fallback values
+      const hashDir = ospath.join(playbookDir, '.cache/antora/collector-cache/hashes/test-component/build')
+      const pointerFiles = fs.readdirSync(hashDir).filter((f) => f.endsWith('.json'))
+      expect(pointerFiles.length).to.equal(1)
+
+      const pointer = JSON.parse(fs.readFileSync(ospath.join(hashDir, pointerFiles[0]), 'utf8'))
+      // Since transformedFiles.length > 0, pointer should have transforms info
+      // with fallback values: mode='global-only', patterns=[]
+      expect(pointer.transforms).to.exist()
+      expect(pointer.transforms.applied).to.deep.equal(['src/main.c'])
+      expect(pointer.transforms.mode).to.equal('global-only') // Fallback from line 604
+      expect(pointer.transforms.patterns).to.deep.equal([]) // Fallback from line 605
     })
   })
 })

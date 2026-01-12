@@ -146,20 +146,23 @@ describe('utils/transform', () => {
     it('should return original content when no transforms provided', () => {
       const content = Buffer.from('original content')
       const result = applyTransforms('file.txt', content, null)
-      expect(result).to.equal(content)
+      expect(result.content).to.equal(content)
+      expect(result.transformed).to.be.false()
     })
 
     it('should return original content when transforms array is empty', () => {
       const content = Buffer.from('original content')
       const result = applyTransforms('file.txt', content, [])
-      expect(result).to.equal(content)
+      expect(result.content).to.equal(content)
+      expect(result.transformed).to.be.false()
     })
 
     it('should return original content when no transforms match', () => {
       const transforms = compileTransforms([{ pattern: '**/pom.xml', replace: [{ regex: 'test', with: 'replaced' }] }])
       const content = Buffer.from('original content')
       const result = applyTransforms('file.txt', content, transforms)
-      expect(result).to.equal(content)
+      expect(result.content).to.equal(content)
+      expect(result.transformed).to.be.false()
     })
 
     it('should apply matching transform', () => {
@@ -168,7 +171,8 @@ describe('utils/transform', () => {
       ])
       const content = Buffer.from('<project><version>1.0.0</version></project>')
       const result = applyTransforms('pom.xml', content, transforms)
-      expect(result).to.equal('<project><version>NORMALIZED</version></project>')
+      expect(result.content).to.equal('<project><version>NORMALIZED</version></project>')
+      expect(result.transformed).to.be.true()
     })
 
     it('should apply multiple replacements in order', () => {
@@ -183,7 +187,8 @@ describe('utils/transform', () => {
       ])
       const content = Buffer.from('first then second')
       const result = applyTransforms('test.txt', content, transforms)
-      expect(result).to.equal('FIRST then SECOND')
+      expect(result.content).to.equal('FIRST then SECOND')
+      expect(result.transformed).to.be.true()
     })
 
     it('should apply multiple matching transforms in order', () => {
@@ -193,7 +198,8 @@ describe('utils/transform', () => {
       ])
       const content = Buffer.from('hello world')
       const result = applyTransforms('test.txt', content, transforms)
-      expect(result).to.equal('HELLO WORLD')
+      expect(result.content).to.equal('HELLO WORLD')
+      expect(result.transformed).to.be.true()
     })
 
     it('should support capture groups ($1, $2, etc.)', () => {
@@ -202,7 +208,8 @@ describe('utils/transform', () => {
       ])
       const content = Buffer.from('<version>1.0.0</version>')
       const result = applyTransforms('pom.xml', content, transforms)
-      expect(result).to.equal('<version>NORMALIZED</version>')
+      expect(result.content).to.equal('<version>NORMALIZED</version>')
+      expect(result.transformed).to.be.true()
     })
 
     it('should handle multiline content with appropriate regex', () => {
@@ -218,8 +225,9 @@ describe('utils/transform', () => {
   <version>1.0.0</version>
 </parent>`)
       const result = applyTransforms('pom.xml', content, transforms)
-      expect(result).to.include('<version>NORMALIZED</version>')
-      expect(result).to.not.include('1.0.0')
+      expect(result.content).to.include('<version>NORMALIZED</version>')
+      expect(result.content).to.not.include('1.0.0')
+      expect(result.transformed).to.be.true()
     })
 
     it('should match glob patterns correctly', () => {
@@ -228,11 +236,13 @@ describe('utils/transform', () => {
 
       // Should match
       let result = applyTransforms('src/main/file.xml', content, transforms)
-      expect(result).to.equal('TEST content')
+      expect(result.content).to.equal('TEST content')
+      expect(result.transformed).to.be.true()
 
       // Should not match
       result = applyTransforms('other/file.xml', content, transforms)
-      expect(result).to.equal(content)
+      expect(result.content).to.equal(content)
+      expect(result.transformed).to.be.false()
     })
 
     it('should log when transforms are applied', () => {
@@ -261,7 +271,8 @@ describe('utils/transform', () => {
       const transforms = compileTransforms([{ pattern: '**/*.txt', replace: [{ regex: 'hello', with: 'hello' }] }])
       const content = Buffer.from('hello world')
       const result = applyTransforms('test.txt', content, transforms)
-      expect(result).to.equal(content)
+      expect(result.content).to.equal(content)
+      expect(result.transformed).to.be.false()
     })
   })
 })

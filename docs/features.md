@@ -172,6 +172,34 @@ JSON files mapping content hash to output location:
 }
 ```
 
+When [hash transforms](advanced.md#hash-transforms) are applied, an additional `transforms` field records debug info:
+
+```json
+{
+  "version": 2,
+  "outputDir": "<output-hash>",
+  "scanDir": "build/output",
+  "sources": {
+    "pom.xml": "<file-hash>",
+    "src/Main.java": "<file-hash>"
+  },
+  "command": "mvn compile",
+  "timestamp": "2025-01-12T10:30:00.000Z",
+  "transforms": {
+    "applied": ["pom.xml"],
+    "mode": "extend",
+    "patterns": ["**/pom.xml"]
+  }
+}
+```
+
+The `transforms` field contains:
+- `applied`: List of source files that had content transformed before hashing
+- `mode`: The transform mode used (`extend`, `replace`, `ignore`, or `global-only`)
+- `patterns`: Glob patterns that were active for matching
+
+This field is only present when files were actually transformed.
+
 ### Backwards Compatibility
 
 Pointer files without a `version` field are treated as version 1 (legacy format). The extension handles both formats transparently.

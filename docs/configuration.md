@@ -24,6 +24,8 @@ ext:
 | `depends-on` | No | Array of other entry keys this depends on |
 | `source-commands` | No | Shell commands that output additional source paths |
 | `restore-to-worktree` | No | Glob patterns for files to restore from cache |
+| `hash-transforms` | No | Per-entry transforms to normalize content before hashing |
+| `hash-transforms-mode` | No | How entry transforms interact with globals (`extend`, `replace`, `ignore`) |
 
 ### key
 
@@ -114,6 +116,48 @@ run:
 
 See [File Restoration](advanced.md#file-restoration) for details.
 
+### hash-transforms
+
+Per-entry transforms to normalize file content before hashing. This allows files with non-deterministic content (timestamps, version numbers) to produce consistent cache keys.
+
+```yaml
+run:
+  hash-transforms:
+    - pattern: "**/pom.xml"
+      replace:
+        - regex: "(<version>)[^<]+(</version>)"
+          with: "$1NORMALIZED$2"
+```
+
+Each transform has:
+- `pattern`: Glob pattern to match source files
+- `replace`: Array of regex replacements to apply
+  - `regex`: Regular expression pattern (JavaScript syntax)
+  - `with`: Replacement string (supports `$1`, `$2` capture groups)
+  - `flags`: Optional regex flags (default: `g`)
+
+See [Hash Transforms](advanced.md#hash-transforms) for detailed usage.
+
+### hash-transforms-mode
+
+Controls how per-entry transforms interact with global transforms defined at the extension level.
+
+| Mode | Behavior |
+|------|----------|
+| `extend` | Entry transforms applied AFTER global transforms (default) |
+| `replace` | Only entry transforms used, globals ignored |
+| `ignore` | No transforms applied to this entry |
+
+```yaml
+run:
+  hash-transforms-mode: replace  # Only use entry-level transforms
+  hash-transforms:
+    - pattern: "**/*.xml"
+      replace:
+        - regex: "<timestamp>[^<]+</timestamp>"
+          with: "<timestamp>NORMALIZED</timestamp>"
+```
+
 ## Scan Configuration
 
 Defines how outputs are scanned into Antora. Can be a single entry or an array.
@@ -183,13 +227,54 @@ ext:
         scan: { ... }
 ```
 
+## Extension Configuration
+
+Global settings defined at the playbook level apply to all components.
+
+### hash_transforms
+
+Global transforms applied to all entries across all components. Define at the extension level:
+
+```yaml
+antora:
+  extensions:
+    - require: '@carr-james/collector-cache-extension'
+      hash_transforms:
+        - pattern: "**/pom.xml"
+          replace:
+            - regex: "(<parent>[\\s\\S]*?<version>)[^<]+(</version>)"
+              with: "$1NORMALIZED$2"
+        - pattern: "**/build.gradle"
+          replace:
+            - regex: "version\\s*=\\s*['\"][^'\"]+['\"]"
+              with: "version = 'NORMALIZED'"
+```
+
+Global transforms are applied BEFORE per-entry transforms (when using `extend` mode).
+
 ## Key Casing
 
-YAML keys are normalized to lowercase by Antora. Both forms work:
+Antora normalizes YAML keys using `camelCaseKeys()` from `@antora/content-aggregator`. The algorithm:
+1. Convert the entire key to lowercase
+2. Replace `_x` or `-x` with `X` (camelCase conversion)
 
-| Canonical | Also Accepted |
-|-----------|---------------|
-| `cache-dir` | `cachedir`, `cacheDir` |
-| `source-commands` | `sourcecommands`, `sourceCommands` |
-| `depends-on` | `dependson`, `dependsOn` |
-| `restore-to-worktree` | `restoretoworktree`, `restoreToWorktree` |
+**The result depends on what you write in YAML:**
+
+| YAML Input | Normalized Result |
+|------------|-------------------|
+| `cache-dir` | `cacheDir` |
+| `cache_dir` | `cacheDir` |
+| `cacheDir` | `cachedir` |
+
+Since users may write either `snake_case`/`kebab-case` or `camelCase`, the extension accepts both normalized forms:
+
+| Recommended | Also Works |
+|-------------|------------|
+| `cache-dir` | `cacheDir`, `cache_dir` |
+| `source-commands` | `sourceCommands`, `source_commands` |
+| `depends-on` | `dependsOn`, `depends_on` |
+| `restore-to-worktree` | `restoreToWorktree`, `restore_to_worktree` |
+| `hash-transforms` | `hashTransforms`, `hash_transforms` |
+| `hash-transforms-mode` | `hashTransformsMode`, `hash_transforms_mode` |
+
+**Recommendation:** Use `kebab-case` (e.g., `cache-dir`) in YAML for consistency with Antora conventions.
