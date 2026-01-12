@@ -4,8 +4,10 @@ Content-addressable caching extension for the Antora Collector Extension.
 
 ## Overview
 
-This extension provides content-addressable caching for collector commands using source file hashes.
-It automatically deduplicates outputs across different versions when source files match, significantly speeding up builds.
+This extension provides content-addressable caching for collector commands.
+It automatically deduplicates outputs when builds produce identical results, significantly speeding up builds.
+
+See the [documentation](docs/getting-started.md) for detailed usage guides.
 
 ## Installation
 
@@ -78,7 +80,7 @@ The `scan` property defines how outputs are scanned into Antora. It can be a sin
 
 ### Prerequisites
 
-* Node.js >= 18.0.0
+* Node.js >= 18.17.0
 * npm
 
 ### Setup

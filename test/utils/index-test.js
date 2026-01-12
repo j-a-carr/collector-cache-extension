@@ -9,6 +9,7 @@ describe('utils/index', () => {
     expect(utils.computeHashes).to.be.a('function')
     expect(utils.computeContentHash).to.be.a('function')
     expect(utils.computeHash).to.be.a('function')
+    expect(utils.computeOutputHash).to.be.a('function')
   })
 
   it('should re-export fs utilities', () => {

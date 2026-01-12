@@ -5,7 +5,8 @@ const { expect, cleanDir } = require('../harness')
 const fs = require('fs')
 const os = require('os')
 const ospath = require('node:path')
-const { computeHashes, computeContentHash, computeHash } = require('../../lib/utils/hash')
+const proxyquire = require('proxyquire')
+const { computeHashes, computeContentHash, computeHash, computeOutputHash } = require('../../lib/utils/hash')
 
 describe('utils/hash', () => {
   let workDir
@@ -101,6 +102,109 @@ describe('utils/hash', () => {
       const hash1 = computeHash('abc')
       const hash2 = computeHash('def')
       expect(hash1).to.not.equal(hash2)
+    })
+  })
+
+  describe('computeOutputHash', () => {
+    it('should compute hash for directory with single file', () => {
+      fs.writeFileSync(ospath.join(workDir, 'output.txt'), 'content', 'utf8')
+      const result = computeOutputHash(workDir)
+      expect(result.hash).to.have.lengthOf(64)
+      expect(result.files).to.have.property('output.txt')
+      expect(result.files['output.txt']).to.have.lengthOf(64)
+    })
+
+    it('should produce consistent hash regardless of file creation order', () => {
+      fs.writeFileSync(ospath.join(workDir, 'b.txt'), 'b content', 'utf8')
+      fs.writeFileSync(ospath.join(workDir, 'a.txt'), 'a content', 'utf8')
+      const hash1 = computeOutputHash(workDir).hash
+
+      // Create in different order in new directory
+      const workDir2 = fs.mkdtempSync(ospath.join(os.tmpdir(), 'hash-test2-'))
+      fs.writeFileSync(ospath.join(workDir2, 'a.txt'), 'a content', 'utf8')
+      fs.writeFileSync(ospath.join(workDir2, 'b.txt'), 'b content', 'utf8')
+      const hash2 = computeOutputHash(workDir2).hash
+
+      expect(hash1).to.equal(hash2)
+
+      // Cleanup workDir2
+      fs.rmSync(workDir2, { recursive: true })
+    })
+
+    it('should include nested files in hash', () => {
+      const nestedDir = ospath.join(workDir, 'nested')
+      fs.mkdirSync(nestedDir)
+      fs.writeFileSync(ospath.join(nestedDir, 'deep.txt'), 'deep content', 'utf8')
+      fs.writeFileSync(ospath.join(workDir, 'root.txt'), 'root content', 'utf8')
+      const result = computeOutputHash(workDir)
+      expect(result.files).to.have.property('nested/deep.txt')
+      expect(result.files).to.have.property('root.txt')
+    })
+
+    it('should skip symlinks', () => {
+      fs.writeFileSync(ospath.join(workDir, 'real.txt'), 'content', 'utf8')
+      fs.symlinkSync(ospath.join(workDir, 'real.txt'), ospath.join(workDir, 'link.txt'))
+      const result = computeOutputHash(workDir)
+      expect(Object.keys(result.files)).to.have.lengthOf(1)
+      expect(result.files).to.have.property('real.txt')
+      expect(result.files).to.not.have.property('link.txt')
+    })
+
+    it('should handle empty directory', () => {
+      const result = computeOutputHash(workDir)
+      expect(result.hash).to.have.lengthOf(64)
+      expect(Object.keys(result.files)).to.have.lengthOf(0)
+    })
+
+    it('should produce different hashes for different content', () => {
+      fs.writeFileSync(ospath.join(workDir, 'file.txt'), 'content A', 'utf8')
+      const hash1 = computeOutputHash(workDir).hash
+
+      fs.writeFileSync(ospath.join(workDir, 'file.txt'), 'content B', 'utf8')
+      const hash2 = computeOutputHash(workDir).hash
+
+      expect(hash1).to.not.equal(hash2)
+    })
+
+    it('should log when logger is provided', () => {
+      const messages = []
+      const logger = { debug: (msg) => messages.push(msg) }
+      fs.writeFileSync(ospath.join(workDir, 'file.txt'), 'content', 'utf8')
+
+      computeOutputHash(workDir, logger)
+
+      expect(messages.some((m) => m.includes('Computing output hash for 1 file(s)'))).to.be.true()
+    })
+
+    it('should use entry.path fallback when parentPath is not available (older Node)', () => {
+      // Create actual file for content reading
+      fs.writeFileSync(ospath.join(workDir, 'file.txt'), 'content', 'utf8')
+
+      // Mock fs.readdirSync to return entries with only 'path' (no parentPath)
+      // This simulates Node 18.17.0 - 20.11.x behavior
+      const mockFs = {
+        ...fs,
+        readdirSync: (dir, options) => {
+          if (options && options.recursive) {
+            return [
+              {
+                name: 'file.txt',
+                path: workDir, // Only path, no parentPath (older Node)
+                isFile: () => true,
+              },
+            ]
+          }
+          return fs.readdirSync(dir, options)
+        },
+      }
+
+      const { computeOutputHash: mockedComputeOutputHash } = proxyquire('../../lib/utils/hash', {
+        fs: mockFs,
+      })
+
+      const result = mockedComputeOutputHash(workDir)
+      expect(result.hash).to.have.lengthOf(64)
+      expect(result.files).to.have.property('file.txt')
     })
   })
 })
