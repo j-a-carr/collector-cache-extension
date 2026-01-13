@@ -3775,7 +3775,10 @@ describe('collector-cache-extension', () => {
       const generatorContext = createGeneratorContext()
       const config = {
         hashTransforms: [
-          { pattern: '**/pom.xml', replace: [{ regex: '<version>[^<]+</version>', with: '<version>NORMALIZED</version>' }] },
+          {
+            pattern: '**/pom.xml',
+            replace: [{ regex: '<version>[^<]+</version>', with: '<version>NORMALIZED</version>' }],
+          },
         ],
       }
 
@@ -3790,7 +3793,10 @@ describe('collector-cache-extension', () => {
       const generatorContext = createGeneratorContext()
       const config = {
         hashtransforms: [
-          { pattern: '**/pom.xml', replace: [{ regex: '<version>[^<]+</version>', with: '<version>NORMALIZED</version>' }] },
+          {
+            pattern: '**/pom.xml',
+            replace: [{ regex: '<version>[^<]+</version>', with: '<version>NORMALIZED</version>' }],
+          },
         ],
       }
 
@@ -3804,7 +3810,10 @@ describe('collector-cache-extension', () => {
     it('should cache HIT when transforms normalize different content to same hash', async () => {
       const config = {
         hashTransforms: [
-          { pattern: '**/pom.xml', replace: [{ regex: '<version>[^<]+</version>', with: '<version>NORMALIZED</version>' }] },
+          {
+            pattern: '**/pom.xml',
+            replace: [{ regex: '<version>[^<]+</version>', with: '<version>NORMALIZED</version>' }],
+          },
         ],
       }
 
@@ -3841,7 +3850,10 @@ describe('collector-cache-extension', () => {
     it('should cache MISS when non-normalized content changes', async () => {
       const config = {
         hashTransforms: [
-          { pattern: '**/pom.xml', replace: [{ regex: '<version>[^<]+</version>', with: '<version>NORMALIZED</version>' }] },
+          {
+            pattern: '**/pom.xml',
+            replace: [{ regex: '<version>[^<]+</version>', with: '<version>NORMALIZED</version>' }],
+          },
         ],
       }
 
@@ -3916,7 +3928,10 @@ describe('collector-cache-extension', () => {
     it('should apply entry-level transforms with extend mode (default)', async () => {
       const config = {
         hashTransforms: [
-          { pattern: '**/pom.xml', replace: [{ regex: '<version>[^<]+</version>', with: '<version>NORMALIZED</version>' }] },
+          {
+            pattern: '**/pom.xml',
+            replace: [{ regex: '<version>[^<]+</version>', with: '<version>NORMALIZED</version>' }],
+          },
         ],
       }
 
@@ -3939,7 +3954,12 @@ describe('collector-cache-extension', () => {
                         cacheDir: 'build/output',
                         // Entry-level transforms (extend global by default)
                         hashTransforms: [
-                          { pattern: '**/config.xml', replace: [{ regex: '<timestamp>[^<]+</timestamp>', with: '<timestamp>NORMALIZED</timestamp>' }] },
+                          {
+                            pattern: '**/config.xml',
+                            replace: [
+                              { regex: '<timestamp>[^<]+</timestamp>', with: '<timestamp>NORMALIZED</timestamp>' },
+                            ],
+                          },
                         ],
                       },
                     },
@@ -3963,7 +3983,10 @@ describe('collector-cache-extension', () => {
     it('should apply only entry-level transforms with replace mode', async () => {
       const config = {
         hashTransforms: [
-          { pattern: '**/pom.xml', replace: [{ regex: '<version>[^<]+</version>', with: '<version>NORMALIZED</version>' }] },
+          {
+            pattern: '**/pom.xml',
+            replace: [{ regex: '<version>[^<]+</version>', with: '<version>NORMALIZED</version>' }],
+          },
         ],
       }
 
@@ -3986,7 +4009,12 @@ describe('collector-cache-extension', () => {
                         cacheDir: 'build/output',
                         // Replace global transforms with entry-level only
                         hashTransforms: [
-                          { pattern: '**/config.xml', replace: [{ regex: '<timestamp>[^<]+</timestamp>', with: '<timestamp>NORMALIZED</timestamp>' }] },
+                          {
+                            pattern: '**/config.xml',
+                            replace: [
+                              { regex: '<timestamp>[^<]+</timestamp>', with: '<timestamp>NORMALIZED</timestamp>' },
+                            ],
+                          },
                         ],
                         hashTransformsMode: 'replace',
                       },
@@ -4012,7 +4040,10 @@ describe('collector-cache-extension', () => {
     it('should skip transforms with ignore mode', async () => {
       const config = {
         hashTransforms: [
-          { pattern: '**/pom.xml', replace: [{ regex: '<version>[^<]+</version>', with: '<version>NORMALIZED</version>' }] },
+          {
+            pattern: '**/pom.xml',
+            replace: [{ regex: '<version>[^<]+</version>', with: '<version>NORMALIZED</version>' }],
+          },
         ],
       }
 
@@ -4057,7 +4088,10 @@ describe('collector-cache-extension', () => {
     it('should handle replace mode without entry transforms in main path', async () => {
       const config = {
         hashTransforms: [
-          { pattern: '**/pom.xml', replace: [{ regex: '<version>[^<]+</version>', with: '<version>NORMALIZED</version>' }] },
+          {
+            pattern: '**/pom.xml',
+            replace: [{ regex: '<version>[^<]+</version>', with: '<version>NORMALIZED</version>' }],
+          },
         ],
       }
 
@@ -4101,7 +4135,10 @@ describe('collector-cache-extension', () => {
     it('should include transforms info in pointer file when files are transformed', async () => {
       const config = {
         hashTransforms: [
-          { pattern: '**/pom.xml', replace: [{ regex: '<version>[^<]+</version>', with: '<version>NORMALIZED</version>' }] },
+          {
+            pattern: '**/pom.xml',
+            replace: [{ regex: '<version>[^<]+</version>', with: '<version>NORMALIZED</version>' }],
+          },
         ],
       }
 
@@ -4203,7 +4240,10 @@ describe('collector-cache-extension', () => {
 
         const config = {
           hashTransforms: [
-            { pattern: '**/pom.xml', replace: [{ regex: '<version>[^<]+</version>', with: '<version>NORMALIZED</version>' }] },
+            {
+              pattern: '**/pom.xml',
+              replace: [{ regex: '<version>[^<]+</version>', with: '<version>NORMALIZED</version>' }],
+            },
           ],
         }
 
@@ -4253,7 +4293,10 @@ describe('collector-cache-extension', () => {
 
         const config = {
           hashTransforms: [
-            { pattern: '**/pom.xml', replace: [{ regex: '<version>[^<]+</version>', with: '<version>NORMALIZED</version>' }] },
+            {
+              pattern: '**/pom.xml',
+              replace: [{ regex: '<version>[^<]+</version>', with: '<version>NORMALIZED</version>' }],
+            },
           ],
         }
 
@@ -4270,9 +4313,7 @@ describe('collector-cache-extension', () => {
                           key: 'build',
                           sources: ['pom.xml'],
                           cacheDir: 'build/output',
-                          hashTransforms: [
-                            { pattern: '**/config.xml', replace: [{ regex: 'test', with: 'TEST' }] },
-                          ],
+                          hashTransforms: [{ pattern: '**/config.xml', replace: [{ regex: 'test', with: 'TEST' }] }],
                           hashTransformsMode: 'replace',
                         },
                       },
@@ -4306,7 +4347,10 @@ describe('collector-cache-extension', () => {
 
         const config = {
           hashTransforms: [
-            { pattern: '**/pom.xml', replace: [{ regex: '<version>[^<]+</version>', with: '<version>NORMALIZED</version>' }] },
+            {
+              pattern: '**/pom.xml',
+              replace: [{ regex: '<version>[^<]+</version>', with: '<version>NORMALIZED</version>' }],
+            },
           ],
         }
 
@@ -4357,7 +4401,10 @@ describe('collector-cache-extension', () => {
 
         const config = {
           hashTransforms: [
-            { pattern: '**/pom.xml', replace: [{ regex: '<version>[^<]+</version>', with: '<version>NORMALIZED</version>' }] },
+            {
+              pattern: '**/pom.xml',
+              replace: [{ regex: '<version>[^<]+</version>', with: '<version>NORMALIZED</version>' }],
+            },
           ],
         }
 
@@ -4407,7 +4454,10 @@ describe('collector-cache-extension', () => {
 
         const config = {
           hashTransforms: [
-            { pattern: '**/pom.xml', replace: [{ regex: '<version>[^<]+</version>', with: '<version>NORMALIZED</version>' }] },
+            {
+              pattern: '**/pom.xml',
+              replace: [{ regex: '<version>[^<]+</version>', with: '<version>NORMALIZED</version>' }],
+            },
           ],
         }
 
@@ -4425,9 +4475,7 @@ describe('collector-cache-extension', () => {
                           sources: ['pom.xml'],
                           cacheDir: 'build/output',
                           // Entry-level transforms to combine with global (extend mode)
-                          hashTransforms: [
-                            { pattern: '**/config.xml', replace: [{ regex: 'test', with: 'TEST' }] },
-                          ],
+                          hashTransforms: [{ pattern: '**/config.xml', replace: [{ regex: 'test', with: 'TEST' }] }],
                           // extend is default, no need to specify hashTransformsMode
                         },
                       },
@@ -4458,7 +4506,10 @@ describe('collector-cache-extension', () => {
 
         const config = {
           hashTransforms: [
-            { pattern: '**/pom.xml', replace: [{ regex: '<version>[^<]+</version>', with: '<version>NORMALIZED</version>' }] },
+            {
+              pattern: '**/pom.xml',
+              replace: [{ regex: '<version>[^<]+</version>', with: '<version>NORMALIZED</version>' }],
+            },
           ],
         }
 
@@ -4502,7 +4553,10 @@ describe('collector-cache-extension', () => {
 
         const config = {
           hashTransforms: [
-            { pattern: '**/pom.xml', replace: [{ regex: '<version>[^<]+</version>', with: '<version>NORMALIZED</version>' }] },
+            {
+              pattern: '**/pom.xml',
+              replace: [{ regex: '<version>[^<]+</version>', with: '<version>NORMALIZED</version>' }],
+            },
           ],
         }
 
@@ -4522,9 +4576,7 @@ describe('collector-cache-extension', () => {
                           key: 'build',
                           sources: ['pom.xml'],
                           cacheDir: 'build/output',
-                          hashTransforms: [
-                            { pattern: '**/config.xml', replace: [{ regex: 'test', with: 'TEST' }] },
-                          ],
+                          hashTransforms: [{ pattern: '**/config.xml', replace: [{ regex: 'test', with: 'TEST' }] }],
                           hashTransformsMode: 'replace',
                         },
                       },
@@ -4549,7 +4601,10 @@ describe('collector-cache-extension', () => {
 
         const config = {
           hashTransforms: [
-            { pattern: '**/pom.xml', replace: [{ regex: '<version>[^<]+</version>', with: '<version>NORMALIZED</version>' }] },
+            {
+              pattern: '**/pom.xml',
+              replace: [{ regex: '<version>[^<]+</version>', with: '<version>NORMALIZED</version>' }],
+            },
           ],
         }
 
@@ -4594,7 +4649,10 @@ describe('collector-cache-extension', () => {
 
         const config = {
           hashTransforms: [
-            { pattern: '**/pom.xml', replace: [{ regex: '<version>[^<]+</version>', with: '<version>NORMALIZED</version>' }] },
+            {
+              pattern: '**/pom.xml',
+              replace: [{ regex: '<version>[^<]+</version>', with: '<version>NORMALIZED</version>' }],
+            },
           ],
         }
 
@@ -4638,7 +4696,10 @@ describe('collector-cache-extension', () => {
 
         const config = {
           hashTransforms: [
-            { pattern: '**/pom.xml', replace: [{ regex: '<version>[^<]+</version>', with: '<version>NORMALIZED</version>' }] },
+            {
+              pattern: '**/pom.xml',
+              replace: [{ regex: '<version>[^<]+</version>', with: '<version>NORMALIZED</version>' }],
+            },
           ],
         }
 
@@ -4659,9 +4720,7 @@ describe('collector-cache-extension', () => {
                           sources: ['pom.xml'],
                           cacheDir: 'build/output',
                           // Entry-level transforms to combine with global (extend mode)
-                          hashTransforms: [
-                            { pattern: '**/config.xml', replace: [{ regex: 'test', with: 'TEST' }] },
-                          ],
+                          hashTransforms: [{ pattern: '**/config.xml', replace: [{ regex: 'test', with: 'TEST' }] }],
                         },
                       },
                     ],

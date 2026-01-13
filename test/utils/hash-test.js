@@ -76,7 +76,10 @@ describe('utils/hash', () => {
 
     it('should apply transforms before hashing', () => {
       const transforms = compileTransforms([
-        { pattern: '**/*.xml', replace: [{ regex: '<version>[^<]+</version>', with: '<version>NORMALIZED</version>' }] },
+        {
+          pattern: '**/*.xml',
+          replace: [{ regex: '<version>[^<]+</version>', with: '<version>NORMALIZED</version>' }],
+        },
       ])
       fs.writeFileSync(ospath.join(workDir, 'pom.xml'), '<version>1.0.0</version>', 'utf8')
       fs.writeFileSync(ospath.join(workDir, 'pom2.xml'), '<version>2.0.0</version>', 'utf8')

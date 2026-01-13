@@ -167,7 +167,10 @@ describe('utils/transform', () => {
 
     it('should apply matching transform', () => {
       const transforms = compileTransforms([
-        { pattern: '**/*.xml', replace: [{ regex: '<version>[^<]+</version>', with: '<version>NORMALIZED</version>' }] },
+        {
+          pattern: '**/*.xml',
+          replace: [{ regex: '<version>[^<]+</version>', with: '<version>NORMALIZED</version>' }],
+        },
       ])
       const content = Buffer.from('<project><version>1.0.0</version></project>')
       const result = applyTransforms('pom.xml', content, transforms)
