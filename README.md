@@ -23,6 +23,12 @@ Register the extension in your Antora playbook:
 antora:
   extensions:
     - require: '@carr-james/collector-cache-extension'
+      # Optional: global hash transforms applied to all entries
+      hash_transforms:
+        - pattern: "**/pom.xml"
+          replace:
+            - regex: "(<version>)[^<]+(</version>)"
+              with: "$1NORMALIZED$2"
 ```
 
 Then configure caching in your component descriptor (`antora.yml`):
@@ -58,6 +64,8 @@ Each entry in `collector-cache` supports:
 | `run.command` | The build command to execute |
 | `run.depends-on` | Optional array of other entry keys this depends on |
 | `run.restore-to-worktree` | Optional glob patterns for files to restore from cache to worktree |
+| `run.hash-transforms` | Optional transforms to normalize file content before hashing (see [Hash Transforms](docs/advanced.md#hash-transforms)) |
+| `run.hash-transforms-mode` | How entry transforms interact with global transforms (`extend`, `replace`, `ignore`) |
 
 ### Scan Configuration
 

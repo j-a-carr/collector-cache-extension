@@ -32,7 +32,8 @@
   ],
   "dependencies": {
     "fast-glob": "^3.3.0",
-    "isomorphic-git": "^1.35.0"
+    "isomorphic-git": "^1.35.0",
+    "picomatch": "^4.0.0"
   },
   "devDependencies": {
     "@antora/content-aggregator": "~3.1",

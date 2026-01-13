@@ -36,4 +36,8 @@ describe('utils/index', () => {
     expect(utils.resolveDependencySources).to.be.a('function')
     expect(utils.buildEntriesMap).to.be.a('function')
   })
+
+  it('should re-export config utilities', () => {
+    expect(utils.camelCaseKeys).to.be.a('function')
+  })
 })
